@@ -27,7 +27,7 @@ passport.use(new GoogleStrategy({
           name: googleName,
           email: googleEmail,
           profilePic: profilePic,
-          password: 'googleAuthPassword' + Date.now(), // Make it unique and more secure
+          password: 'googleAuthPassword' + Date.now(), 
         });
         await user.save();
       } else {
