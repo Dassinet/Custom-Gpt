@@ -415,7 +415,7 @@ When providing code examples:
         try {
             // Always trigger indexing even if there are no files to save system prompt
             const response = await axios.post(
-                `${PYTHON_URL}/index-knowledge`,
+                `${PYTHON_URL}/setup-gpt-context`,
                 {
                     file_urls: fileUrls,
                     user_email: email || "user@example.com",

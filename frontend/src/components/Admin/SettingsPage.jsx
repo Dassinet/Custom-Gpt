@@ -60,14 +60,23 @@ const SettingsPage = () => {
                         llama: keys.llama || ''
                     });
                 } else {
-                    // If the server doesn't have API keys stored yet, try to load from localStorage for backward compatibility
-                    const savedKeys = JSON.parse(localStorage.getItem('apiKeys') || '{}');
-                    setApiKeys(prev => ({ ...prev, ...savedKeys }));
+                    // If server response not successful, use empty keys
+                    setApiKeys({
+                        openai: '',
+                        claude: '',
+                        gemini: '',
+                        llama: ''
+                    });
                 }
             } catch (error) {
-                // Fallback to localStorage if server fetch fails
-                const savedKeys = JSON.parse(localStorage.getItem('apiKeys') || '{}');
-                setApiKeys(prev => ({ ...prev, ...savedKeys }));
+                // If error, initialize with empty keys instead of localStorage
+                console.error("Failed to fetch API keys from server:", error);
+                setApiKeys({
+                    openai: '',
+                    claude: '',
+                    gemini: '',
+                    llama: ''
+                });
             } finally {
                 setApiKeysLoading(false);
             }
@@ -100,21 +109,13 @@ const SettingsPage = () => {
             const response = await axiosInstance.post('/api/auth/user/api-keys', { apiKeys }, { withCredentials: true });
 
             if (response.data && response.data.success) {
-                localStorage.setItem('apiKeys', JSON.stringify(apiKeys));
+                // Remove localStorage saving
                 toast.success("API keys updated successfully");
             } else {
                 throw new Error(response.data?.message || "Failed to save API keys");
             }
         } catch (error) {
             toast.error(error.response?.data?.message || "Failed to save API keys");
-
-            // Still try to save to localStorage as fallback
-            try {
-                localStorage.setItem('apiKeys', JSON.stringify(apiKeys));
-                toast.info("API keys saved locally (offline mode)");
-            } catch (localError) {
-                // Error saving to localStorage
-            }
         } finally {
             setApiKeysLoading(false);
         }

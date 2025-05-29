@@ -130,6 +130,7 @@ const AdminChat = () => {
     const [currentConversationId, setCurrentConversationId] = useState(null);
     const [loading, setLoading] = useState({ message: false });
     const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+    const [apiKeys, setApiKeys] = useState({});
 
     // Use effect to handle user data changes
     useEffect(() => {
@@ -138,7 +139,48 @@ const AdminChat = () => {
         }
     }, [user]);
 
-    // Notify backend when GPT opens to trigger indexing
+    // Create a better fetchApiKeys function with retry logic
+    const fetchApiKeysFromBackend = async (retry = 3) => {
+        try {
+            if (!user?._id) {
+                console.warn("Cannot fetch API keys - user not authenticated yet");
+                return {};
+            }
+            
+            console.log("Fetching API keys from backend...");
+            const response = await axiosInstance.get('/api/auth/user/api-keys', {
+                withCredentials: true
+            });
+            
+            if (response.data && response.data.success) {
+                const keys = response.data.apiKeys || {};
+                console.log("API keys fetched successfully:", Object.keys(keys));
+                // Update state with the fetched keys
+                setApiKeys(keys);
+                return keys;
+            }
+            return {};
+        } catch (error) {
+            console.error("Failed to fetch API keys from server:", error);
+            if (retry > 0) {
+                console.log(`Retrying API key fetch (${retry} attempts left)...`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                return fetchApiKeysFromBackend(retry - 1);
+            }
+            return {};
+        }
+    };
+
+    // Add a useEffect to fetch API keys after user is authenticated
+    useEffect(() => {
+        if (user?._id) {
+            fetchApiKeysFromBackend().then(keys => {
+                console.log("Initial API keys fetched:", Object.keys(keys));
+            });
+        }
+    }, [user]);
+
+    // Update notifyGptOpened function
     const notifyGptOpened = async (gptData, userData) => {
         try {
             if (!gptData || !userData || !gptData._id || hasNotifiedGptOpened) {
@@ -151,13 +193,9 @@ const AdminChat = () => {
 
             const useHybridSearch = gptData.capabilities?.hybridSearch || false;
             
-            // Get API keys from localStorage
-            let apiKeys = {};
-            try {
-                apiKeys = JSON.parse(localStorage.getItem('apiKeys') || '{}');
-            } catch (e) {
-                console.warn("Failed to parse API keys from localStorage");
-            }
+            // Get API keys from backend instead of localStorage
+            const apiKeys = await fetchApiKeysFromBackend();
+            console.log("Fetched API keys from backend:", Object.keys(apiKeys));
 
             const response = await axios.post(
                 `${PYTHON_URL}/gpt-opened`,
@@ -173,7 +211,7 @@ const AdminChat = () => {
                         capabilities: gptData.capabilities,
                         use_hybrid_search: useHybridSearch
                     },
-                    api_keys: apiKeys // Add API keys to the payload
+                    api_keys: apiKeys
                 },
                 {
                     headers: {
@@ -340,6 +378,7 @@ const AdminChat = () => {
         }
     };
 
+    // Update handleChatSubmit function
     const handleChatSubmit = async (message) => {
         if (!message.trim()) return;
 
@@ -382,6 +421,10 @@ const AdminChat = () => {
 
             const useHybridSearch = gptData?.capabilities?.hybridSearch || false;
 
+            // Get API keys from backend
+            const apiKeys = await fetchApiKeysFromBackend();
+            console.log("Using API keys for chat:", Object.keys(apiKeys));
+
             const payload = {
                 message,
                 gpt_id: gptId,
@@ -396,7 +439,8 @@ const AdminChat = () => {
                 })),
                 use_hybrid_search: useHybridSearch,
                 system_prompt: gptData?.instructions || null,
-                web_search_enabled: gptData?.capabilities?.webBrowsing || false
+                web_search_enabled: gptData?.capabilities?.webBrowsing || false,
+                api_keys: apiKeys
             };
 
             if (!payload.user_email) {
@@ -509,6 +553,7 @@ const AdminChat = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages]);
 
+    // Update handleFileUpload function
     const handleFileUpload = async (files) => {
         if (!files.length || !gptData) return;
 
@@ -531,6 +576,10 @@ const AdminChat = () => {
             formData.append('collection_name', collectionName || gptData._id);
             formData.append('is_user_document', 'true');
             formData.append('system_prompt', gptData?.instructions || '');
+
+            // Get API keys from backend and add to form data
+            const apiKeys = await fetchApiKeysFromBackend();
+            formData.append('api_keys', JSON.stringify(apiKeys));
 
             const startTime = Date.now();
             const uploadDuration = 1500;

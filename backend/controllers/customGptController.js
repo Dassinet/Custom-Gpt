@@ -7,7 +7,6 @@ const UserGptAssignment = require('../models/UserGptAssignment');
 const User = require('../models/User');
 const UserFavorite = require('../models/UserFavorite');
 
-
 // Configure multer for memory storage
 const storage = multer.memoryStorage();
 const upload = multer({
@@ -27,8 +26,6 @@ const handleCombinedUpload = upload.fields([
 
 // Create a new custom GPT
 const createCustomGpt = async (req, res) => {
-
-
   try {
     const { name, description, instructions, conversationStarter, model, capabilities } = req.body;
 
@@ -80,7 +77,6 @@ const createCustomGpt = async (req, res) => {
         customGpt.imageUrl = fileUrl;
       } catch (uploadError) {
         console.error("Error during image upload to R2:", uploadError);
-        // Decide if you want to stop or continue without the image
         return res.status(500).json({ success: false, message: 'Failed during image upload', error: uploadError.message });
       }
     }
@@ -105,11 +101,9 @@ const createCustomGpt = async (req, res) => {
         customGpt.knowledgeFiles = knowledgeFilesData;
       } catch (uploadError) {
         console.error("Error during knowledge file upload to R2:", uploadError);
-        // Decide if you want to stop or continue without the knowledge files
         return res.status(500).json({ success: false, message: 'Failed during knowledge file upload', error: uploadError.message });
       }
     }
-
 
     // Explicitly log the save operation and force a database test
     const savedGpt = await customGpt.save();
@@ -128,7 +122,6 @@ const createCustomGpt = async (req, res) => {
     });
 
   } catch (error) {
-    // Log the specific error
     console.error('--- Error caught in createCustomGpt catch block ---');
     console.error("Error Name:", error.name);
     console.error("Error Message:", error.message);
@@ -136,7 +129,6 @@ const createCustomGpt = async (req, res) => {
 
     // Check for Mongoose validation errors specifically
     if (error.name === 'ValidationError') {
-      // Extract cleaner validation messages
       const validationErrors = Object.values(error.errors).map(err => err.message);
       console.error("Validation Errors:", validationErrors);
       return res.status(400).json({
@@ -149,7 +141,7 @@ const createCustomGpt = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to create custom GPT',
-      error: error.message // Send a generic message or specific if safe
+      error: error.message
     });
   }
 };
@@ -174,7 +166,6 @@ const getUserCustomGpts = async (req, res) => {
 // Get a specific custom GPT by ID
 const getCustomGptById = async (req, res) => {
   try {
-    // Check if id is valid before attempting to find
     if (!req.params.id || req.params.id === 'undefined') {
       return res.status(400).json({
         success: false,
@@ -191,7 +182,6 @@ const getCustomGptById = async (req, res) => {
       });
     }
 
-    // Check if the user owns this GPT
     if (customGpt.createdBy.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         success: false,
@@ -225,7 +215,6 @@ const updateCustomGpt = async (req, res) => {
       });
     }
 
-    // Check if the user owns this GPT
     if (customGpt.createdBy.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         success: false,
@@ -235,7 +224,6 @@ const updateCustomGpt = async (req, res) => {
 
     const { name, description, instructions, conversationStarter, model, capabilities } = req.body;
 
-    // Update basic fields
     customGpt.name = name || customGpt.name;
     customGpt.description = description || customGpt.description;
     customGpt.instructions = instructions || customGpt.instructions;
@@ -246,15 +234,11 @@ const updateCustomGpt = async (req, res) => {
       customGpt.capabilities = JSON.parse(capabilities);
     }
 
-    // Access files from req.files (now an object)
     const imageFile = req.files?.image ? req.files.image[0] : null;
     const knowledgeUploads = req.files?.knowledgeFiles || [];
 
-    // Upload new image if provided
     if (imageFile) {
-      // Delete old image if exists
       if (customGpt.imageUrl) {
-        // Extract key from imageUrl
         const key = customGpt.imageUrl.replace(process.env.R2_PUBLIC_URL + '/', '');
         await deleteFromR2(key);
       }
@@ -267,9 +251,7 @@ const updateCustomGpt = async (req, res) => {
       customGpt.imageUrl = fileUrl;
     }
 
-    // Handle knowledge files if provided
     if (knowledgeUploads.length > 0) {
-      // Delete old files if needed and specified in request
       if (req.body.replaceKnowledge === 'true' && customGpt.knowledgeFiles.length > 0) {
         for (const file of customGpt.knowledgeFiles) {
           const key = file.fileUrl.replace(process.env.R2_PUBLIC_URL + '/', '');
@@ -278,7 +260,6 @@ const updateCustomGpt = async (req, res) => {
         customGpt.knowledgeFiles = [];
       }
 
-      // Upload new files
       const newKnowledgeFilesData = await Promise.all(
         knowledgeUploads.map(async (file) => {
           const { fileUrl } = await uploadToR2(
@@ -329,7 +310,6 @@ const deleteCustomGpt = async (req, res) => {
       });
     }
 
-    // Check if the user owns this GPT
     if (customGpt.createdBy.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         success: false,
@@ -343,11 +323,16 @@ const deleteCustomGpt = async (req, res) => {
       await deleteFromR2(imageKey);
     }
 
-    // Delete knowledge files
     for (const file of customGpt.knowledgeFiles) {
       const fileKey = file.fileUrl.replace(process.env.R2_PUBLIC_URL + '/', '');
       await deleteFromR2(fileKey);
     }
+
+    // Delete related favorites
+    await UserFavorite.deleteMany({ gpt: req.params.id });
+
+    // Delete related assignments
+    await UserGptAssignment.deleteMany({ gptId: req.params.id });
 
     // Delete the custom GPT from database
     await CustomGpt.findByIdAndDelete(req.params.id);
@@ -380,7 +365,6 @@ const deleteKnowledgeFile = async (req, res) => {
       });
     }
 
-    // Check if the user owns this GPT
     if (customGpt.createdBy.toString() !== req.user._id.toString()) {
       return res.status(403).json({
         success: false,
@@ -388,7 +372,6 @@ const deleteKnowledgeFile = async (req, res) => {
       });
     }
 
-    // Check if the file exists
     if (!customGpt.knowledgeFiles[fileIndex]) {
       return res.status(404).json({
         success: false,
@@ -396,11 +379,9 @@ const deleteKnowledgeFile = async (req, res) => {
       });
     }
 
-    // Delete the file from R2
     const fileKey = customGpt.knowledgeFiles[fileIndex].fileUrl.replace(process.env.R2_PUBLIC_URL + '/', '');
     await deleteFromR2(fileKey);
 
-    // Remove the file from the array
     customGpt.knowledgeFiles.splice(fileIndex, 1);
     await customGpt.save();
 
@@ -421,9 +402,7 @@ const deleteKnowledgeFile = async (req, res) => {
 
 const getAllCustomGpts = async (req, res) => {
   try {
-    // Only show GPTs created by the admin (current user)
     const filter = { createdBy: req.user._id };
-
     const customGpts = await CustomGpt.find(filter); 
     res.status(200).json({
       success: true,
@@ -440,10 +419,8 @@ const getAllCustomGpts = async (req, res) => {
 
 const getUserAssignedGpts = async (req, res) => {
   try {
-    const userId = req.params.userId || req.user._id;  // Allow using either parameter or current user
-    
-    
-    // Check for assignments in UserGptAssignment collection
+    const userId = req.params.userId || req.user._id;
+
     const assignments = await UserGptAssignment.find({ userId }).lean();
     
     if (assignments.length === 0) {
@@ -453,12 +430,10 @@ const getUserAssignedGpts = async (req, res) => {
       });
     }
     
-    // Get GPT details for each assignment
     const gptIds = assignments.map(assignment => assignment.gptId);
     
     const gpts = await CustomGpt.find({ _id: { $in: gptIds } }).lean();
     
-    // Add assignment dates and folder to each GPT
     const gptsWithDetails = gpts.map(gpt => {
       const assignment = assignments.find(a => a.gptId.toString() === gpt._id.toString());
       return {
@@ -468,10 +443,8 @@ const getUserAssignedGpts = async (req, res) => {
       };
     });
     
-    // Get user's favorites to mark the favorite GPTs
     const userFavorites = await UserFavorite.find({ user: userId }).distinct('gpt');
     
-    // Add isFavorite flag to each GPT
     const gptsWithFavorites = gptsWithDetails.map(gpt => {
       return {
         ...gpt,
@@ -523,7 +496,6 @@ const assignGptToUser = async (req, res) => {
       });
     }
 
-    // Check if assignment already exists
     const existingAssignment = await UserGptAssignment.findOne({ userId, gptId });
     if (existingAssignment) {
       return res.status(200).json({
@@ -586,7 +558,6 @@ const unassignGptFromUser = async (req, res) => {
 
 const getUserGptCount = async (req, res) => {
   try {
-    // Only admins can access this
     if (req.user.role !== 'admin') {
       return res.status(403).json({
         success: false,
@@ -594,7 +565,6 @@ const getUserGptCount = async (req, res) => {
       });
     }
 
-    // Get all users
     const users = await User.find().select('_id');
 
     const userGptCounts = {};
@@ -629,7 +599,6 @@ const getUserGptCount = async (req, res) => {
   }
 };
 
-// Get assigned GPT by ID
 const getAssignedGptById = async (req, res) => {
   try {
     const gptId = req.params.id;
@@ -642,7 +611,6 @@ const getAssignedGptById = async (req, res) => {
       });
     }
 
-    // First, check if this GPT is assigned to the user
     const assignment = await UserGptAssignment.findOne({
       userId: userId,
       gptId: gptId
@@ -655,7 +623,6 @@ const getAssignedGptById = async (req, res) => {
       });
     }
 
-    // If assignment exists, get the GPT details
     const customGpt = await CustomGpt.findById(gptId);
 
     if (!customGpt) {
@@ -678,13 +645,11 @@ const getAssignedGptById = async (req, res) => {
   }
 };
 
-// New controller function to update the folder
 const updateGptFolder = async (req, res) => {
   try {
     const { id } = req.params;
-    const { folder } = req.body; // folder can be a string or null/undefined
+    const { folder } = req.body;
 
-    // Validate folder name slightly (optional, prevent overly long names etc.)
     if (folder && typeof folder === 'string' && folder.length > 100) {
       return res.status(400).json({
         success: false,
@@ -701,18 +666,13 @@ const updateGptFolder = async (req, res) => {
       });
     }
 
-    // Check if the user owns this GPT or is an admin (adjust authorization as needed)
-    // Assuming only the creator can modify it for now
     if (customGpt.createdBy.toString() !== req.user._id.toString()) {
-      // Maybe allow admins too?
-      // if (customGpt.createdBy.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
       return res.status(403).json({
         success: false,
         message: 'Not authorized to modify this custom GPT'
       });
     }
 
-    // Update the folder - set to null if folder is null/empty string, otherwise use the string
     customGpt.folder = folder || null; 
     
     await customGpt.save();
@@ -720,7 +680,7 @@ const updateGptFolder = async (req, res) => {
     res.status(200).json({
       success: true,
       message: 'GPT folder updated successfully',
-      customGpt: { // Send back minimal updated info if needed
+      customGpt: {
         _id: customGpt._id,
         folder: customGpt.folder
       } 
@@ -728,7 +688,6 @@ const updateGptFolder = async (req, res) => {
 
   } catch (error) {
     console.error('Error updating GPT folder:', error);
-    // Handle potential validation errors from Mongoose if you add stricter schema rules
     if (error.name === 'ValidationError') {
       return res.status(400).json({ success: false, message: error.message });
     }
@@ -740,152 +699,143 @@ const updateGptFolder = async (req, res) => {
   }
 };
 
-// Get user's favorite GPTs
 const getUserFavorites = async (req, res) => {
-    try {
-        const userId = req.user._id;
-        
-        // Find all favorites for this user
-        const favorites = await UserFavorite.find({ user: userId })
-            .populate({
-                path: 'gpt',
-                // Select necessary fields, potentially removing assignedAt if it's not directly on CustomGpt
-                select: 'name description model imageUrl capabilities files' 
-            })
-            .lean(); // Use lean for better performance
+  try {
+    const userId = req.user._id;
+    
+    // Find all favorites for this user
+    const favorites = await UserFavorite.find({ user: userId })
+      .populate({
+        path: 'gpt',
+        select: 'name description model imageUrl capabilities files'
+      })
+      .lean();
 
-        if (!favorites.length) {
-            return res.status(200).json({ success: true, gpts: [] });
-        }
-        
-        // Get GPT IDs from favorites
-        const gptIds = favorites.map(fav => fav.gpt._id);
-        
-        // Find the corresponding assignments to get folder info
-        const assignments = await UserGptAssignment.find({ 
-            userId: userId, 
-            gptId: { $in: gptIds } 
-        }).lean();
-        
-        // Create a map for easy lookup: gptId -> folder
-        const assignmentFolderMap = assignments.reduce((map, assignment) => {
-            map[assignment.gptId.toString()] = assignment.folder || null;
-            return map;
-        }, {});
+    // Filter out favorites where the GPT doesn't exist (i.e., fav.gpt is null)
+    const validFavorites = favorites.filter(fav => fav.gpt !== null);
 
-        // Extract the GPT data and add folder info
-        const gpts = favorites.map(fav => {
-            const gptObject = fav.gpt; // Already a plain object due to .lean()
-            gptObject.isFavorite = true;
-            // Assign folder from the map, default to null if not found (shouldn't happen ideally)
-            gptObject.folder = assignmentFolderMap[gptObject._id.toString()] || null; 
-            // Note: You might want createdAt from the favorite record, not the GPT itself
-            gptObject.createdAt = fav.createdAt; // Use favorite creation date
-            return gptObject;
-        });
-        
-        return res.status(200).json({
-            success: true,
-            gpts
-        });
-    } catch (error) {
-        console.error('Error fetching user favorites:', error);
-        return res.status(500).json({
-            success: false,
-            message: 'Failed to fetch favorite GPTs',
-            error: error.message
-        });
+    if (!validFavorites.length) {
+      return res.status(200).json({ success: true, gpts: [] });
     }
+    
+    // Get GPT IDs from valid favorites
+    const gptIds = validFavorites.map(fav => fav.gpt._id);
+    
+    // Find the corresponding assignments to get folder info
+    const assignments = await UserGptAssignment.find({ 
+      userId: userId, 
+      gptId: { $in: gptIds } 
+    }).lean();
+    
+    // Create a map for easy lookup: gptId -> folder
+    const assignmentFolderMap = assignments.reduce((map, assignment) => {
+      map[assignment.gptId.toString()] = assignment.folder || null;
+      return map;
+    }, {});
+
+    // Extract the GPT data and add folder info
+    const gpts = validFavorites.map(fav => {
+      const gptObject = fav.gpt; // Already a plain object due to .lean()
+      gptObject.isFavorite = true;
+      gptObject.folder = assignmentFolderMap[gptObject._id.toString()] || null; 
+      gptObject.createdAt = fav.createdAt; // Use favorite creation date
+      return gptObject;
+    });
+    
+    return res.status(200).json({
+      success: true,
+      gpts
+    });
+  } catch (error) {
+    console.error('Error fetching user favorites:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch favorite GPTs',
+      error: error.message
+    });
+  }
 };
 
-// Add a GPT to user's favorites
 const addToFavorites = async (req, res) => {
-    try {
-        const userId = req.user._id;
-        const { gptId } = req.params;
-        
-        // Check if the GPT exists and is assigned to the user
-        const isAssigned = await UserGptAssignment.exists({ 
-            userId: userId,
-            gptId: gptId
-        });
-        
-        if (!isAssigned) {
-            return res.status(404).json({
-                success: false,
-                message: 'GPT not found or not assigned to you'
-            });
-        }
-        
-        // Create a new favorite (the unique index will prevent duplicates)
-        await UserFavorite.create({
-            user: userId,
-            gpt: gptId
-        });
-        
-        return res.status(201).json({
-            success: true,
-            message: 'GPT added to favorites'
-        });
-    } catch (error) {
-        // If it's a duplicate key error, just return success
-        if (error.code === 11000) {
-            return res.status(200).json({
-                success: true,
-                message: 'GPT is already in favorites'
-            });
-        }
-        
-        console.error('Error adding to favorites:', error);
-        return res.status(500).json({
-            success: false,
-            message: 'Failed to add GPT to favorites',
-            error: error.message
-        });
+  try {
+    const userId = req.user._id;
+    const { gptId } = req.params;
+    
+    const isAssigned = await UserGptAssignment.exists({ 
+      userId: userId,
+      gptId: gptId
+    });
+    
+    if (!isAssigned) {
+      return res.status(404).json({
+        success: false,
+        message: 'GPT not found or not assigned to you'
+      });
     }
+    
+    await UserFavorite.create({
+      user: userId,
+      gpt: gptId
+    });
+    
+    return res.status(201).json({
+      success: true,
+      message: 'GPT added to favorites'
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(200).json({
+        success: true,
+        message: 'GPT is already in favorites'
+      });
+    }
+    
+    console.error('Error adding to favorites:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to add GPT to favorites',
+      error: error.message
+    });
+  }
 };
 
-// Remove a GPT from user's favorites
 const removeFromFavorites = async (req, res) => {
-    try {
-        const userId = req.user._id;
-        const { gptId } = req.params;
-        
-        // Delete the favorite
-        const result = await UserFavorite.deleteOne({
-            user: userId,
-            gpt: gptId
-        });
-        
-        if (result.deletedCount === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'GPT not found in favorites'
-            });
-        }
-        
-        return res.status(200).json({
-            success: true,
-            message: 'GPT removed from favorites'
-        });
-    } catch (error) {
-        console.error('Error removing from favorites:', error);
-        return res.status(500).json({
-            success: false,
-            message: 'Failed to remove GPT from favorites',
-            error: error.message
-        });
+  try {
+    const userId = req.user._id;
+    const { gptId } = req.params;
+    
+    const result = await UserFavorite.deleteOne({
+      user: userId,
+      gpt: gptId
+    });
+    
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'GPT not found in favorites'
+      });
     }
+    
+    return res.status(200).json({
+      success: true,
+      message: 'GPT removed from favorites'
+    });
+  } catch (error) {
+    console.error('Error removing from favorites:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to remove GPT from favorites',
+      error: error.message
+    });
+  }
 };
 
-// Update GPT folder for user assignment
 const updateUserGptFolder = async (req, res) => {
   try {
     const userId = req.user._id;
     const { gptId } = req.params;
-    const { folder } = req.body; // folder can be a string or null/undefined
+    const { folder } = req.body;
 
-    // Validate folder name slightly (optional, prevent overly long names etc.)
     if (folder && typeof folder === 'string' && folder.length > 100) {
       return res.status(400).json({
         success: false,
@@ -893,7 +843,6 @@ const updateUserGptFolder = async (req, res) => {
       });
     }
 
-    // Find the assignment
     const assignment = await UserGptAssignment.findOne({ 
       userId: userId, 
       gptId: gptId 
@@ -906,7 +855,6 @@ const updateUserGptFolder = async (req, res) => {
       });
     }
 
-    // Update the folder - set to null if folder is null/empty string, otherwise use the string
     assignment.folder = folder || null;
     await assignment.save();
 
@@ -947,4 +895,4 @@ module.exports = {
   addToFavorites,
   removeFromFavorites,
   updateUserGptFolder
-}; 
+};

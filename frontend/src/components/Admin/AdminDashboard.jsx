@@ -25,7 +25,6 @@ const modelIcons = {
     'llama': <BiLogoMeta className="text-blue-500" size={18} />
 };
 
-// Add this function after the modelIcons declaration (around line 25)
 const getDisplayModelName = (modelType) => {
     if (modelType === 'openrouter/auto') return 'router-engine';
     return modelType;
@@ -99,8 +98,6 @@ const EnhancedAgentCard = ({ agent, onClick, onEdit, onDelete, onMoveToFolder })
                         <span>Web search</span>
                     </div>
                 )}
-
-
             </div>
         </div>
     );
@@ -116,11 +113,9 @@ const AdminDashboard = ({ userName = "Admin User" }) => {
     const [showSidebar, setShowSidebar] = useState(false);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [agentsData, setAgentsData] = useState({
-        featured: [],
-        productivity: [],
-        education: [],
-        entertainment: []
+    const [folderData, setFolderData] = useState({
+        recent: [],
+        uncategorized: []
     });
     const [gptCreated, setGptCreated] = useState(false);
     const { isDarkMode, toggleTheme } = useTheme();
@@ -142,10 +137,10 @@ const AdminDashboard = ({ userName = "Admin User" }) => {
 
                     // Update the state to reflect the deletion
                     const updatedData = {};
-                    Object.keys(agentsData).forEach(category => {
-                        updatedData[category] = agentsData[category].filter(agent => agent.id !== id);
+                    Object.keys(folderData).forEach(folder => {
+                        updatedData[folder] = folderData[folder].filter(agent => agent.id !== id);
                     });
-                    setAgentsData(updatedData);
+                    setFolderData(updatedData);
                 } else {
                     toast.error(response.data.message || "Failed to delete GPT");
                 }
@@ -156,7 +151,7 @@ const AdminDashboard = ({ userName = "Admin User" }) => {
                 setLoading(false);
             }
         }
-    }, [agentsData]);
+    }, [folderData]);
 
     // Handler for editing a GPT
     const handleEditGpt = useCallback((id) => {
@@ -171,14 +166,34 @@ const AdminDashboard = ({ userName = "Admin User" }) => {
 
     // Handler for when a GPT is successfully moved
     const handleGptMoved = useCallback((movedGpt, newFolderName) => {
-        // Update the folder info in state
-        const updatedData = {};
-        Object.keys(agentsData).forEach(category => {
-            updatedData[category] = agentsData[category].map(agent =>
-                agent.id === movedGpt._id ? { ...agent, folder: newFolderName || null } : agent
-            );
+        // Create a new state object
+        const updatedData = { ...folderData };
+        
+        // Remove agent from its previous folder
+        Object.keys(updatedData).forEach(folder => {
+            updatedData[folder] = updatedData[folder].filter(agent => agent.id !== movedGpt._id);
         });
-        setAgentsData(updatedData);
+
+        // Create the folder if it doesn't exist
+        const folderKey = newFolderName ? newFolderName.toLowerCase().replace(/\s+/g, '_') : 'uncategorized';
+        if (!updatedData[folderKey]) {
+            updatedData[folderKey] = [];
+        }
+
+        // Find the agent in all folders
+        let movedAgent = null;
+        Object.values(folderData).forEach(agents => {
+            const found = agents.find(agent => agent.id === movedGpt._id);
+            if (found) movedAgent = { ...found, folder: newFolderName || null };
+        });
+
+        // Add agent to its new folder
+        if (movedAgent) {
+            updatedData[folderKey].push(movedAgent);
+        }
+
+        // Update state
+        setFolderData(updatedData);
 
         // Add new folder to folders list if it doesn't exist yet
         if (newFolderName && !folders.includes(newFolderName)) {
@@ -188,7 +203,7 @@ const AdminDashboard = ({ userName = "Admin User" }) => {
         setShowMoveModal(false);
         setAgentToMove(null);
         toast.success(`GPT moved successfully.`);
-    }, [agentsData, folders]);
+    }, [folderData, folders]);
 
     const applySorting = (data, sortOpt) => {
         if (sortOpt === 'Default') return data;
@@ -196,9 +211,10 @@ const AdminDashboard = ({ userName = "Admin User" }) => {
         const sortFn = sortOpt === 'Latest'
             ? (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
             : (a, b) => new Date(a.createdAt) - new Date(b.createdAt);
-        Object.keys(sortedData).forEach(category => {
-            if (Array.isArray(sortedData[category])) {
-                sortedData[category] = [...sortedData[category]].sort(sortFn);
+        
+        Object.keys(sortedData).forEach(folder => {
+            if (Array.isArray(sortedData[folder])) {
+                sortedData[folder] = [...sortedData[folder]].sort(sortFn);
             }
         });
         return sortedData;
@@ -211,6 +227,7 @@ const AdminDashboard = ({ userName = "Admin User" }) => {
                 const response = await axiosInstance.get(`/api/custom-gpts`, {
                     withCredentials: true
                 });
+                
                 if (response.data.success && response.data.customGpts) {
                     const sortedGpts = [...response.data.customGpts].sort((a, b) =>
                         new Date(b.createdAt) - new Date(a.createdAt)
@@ -222,13 +239,14 @@ const AdminDashboard = ({ userName = "Admin User" }) => {
                         .map(gpt => gpt.folder))];
                     setFolders(prev => [...new Set(['Uncategorized', ...uniqueFolders])]);
 
-                    const categorizedData = {
-                        featured: [],
-                        productivity: [],
-                        education: [],
-                        entertainment: []
+                    // Organize GPTs by folder
+                    const folderBasedData = {
+                        recent: [], // Keep recent section for newest GPTs
+                        uncategorized: [] // For GPTs without a folder
                     };
-                    categorizedData.featured = sortedGpts.slice(0, 4).map(gpt => ({
+
+                    // Add recent GPTs (most recent 4)
+                    folderBasedData.recent = sortedGpts.slice(0, 4).map(gpt => ({
                         id: gpt._id,
                         image: gpt.imageUrl || defaultAgentImage,
                         name: gpt.name,
@@ -236,10 +254,16 @@ const AdminDashboard = ({ userName = "Admin User" }) => {
                         modelType: gpt.model,
                         hasWebSearch: gpt.capabilities?.webBrowsing,
                         createdAt: gpt.createdAt,
-                        folder: gpt.folder // Add folder information
+                        folder: gpt.folder
                     }));
+
+                    // Process all GPTs and organize by folder
                     sortedGpts.forEach(gpt => {
-                        const text = (gpt.description + ' ' + gpt.name).toLowerCase();
+                        // Skip if already in recent
+                        if (folderBasedData.recent.some(a => a.id === gpt._id)) {
+                            return;
+                        }
+
                         const agent = {
                             id: gpt._id,
                             image: gpt.imageUrl || defaultAgentImage,
@@ -248,24 +272,25 @@ const AdminDashboard = ({ userName = "Admin User" }) => {
                             modelType: gpt.model,
                             hasWebSearch: gpt.capabilities?.webBrowsing,
                             createdAt: gpt.createdAt,
-                            folder: gpt.folder // Add folder information
+                            folder: gpt.folder
                         };
-                        if (categorizedData.featured.some(a => a.name === gpt.name)) {
-                            return;
-                        }
-                        if (text.includes('work') || text.includes('task') || text.includes('productivity')) {
-                            categorizedData.productivity.push(agent);
-                        } else if (text.includes('learn') || text.includes('study') || text.includes('education')) {
-                            categorizedData.education.push(agent);
-                        } else if (text.includes('game') || text.includes('movie') || text.includes('fun')) {
-                            categorizedData.entertainment.push(agent);
+
+                        if (gpt.folder) {
+                            // Create normalized folder key (lowercase, replace spaces with underscores)
+                            const folderKey = gpt.folder.toLowerCase().replace(/\s+/g, '_');
+                            
+                            // Create folder array if it doesn't exist
+                            if (!folderBasedData[folderKey]) {
+                                folderBasedData[folderKey] = [];
+                            }
+                            
+                            folderBasedData[folderKey].push(agent);
                         } else {
-                            const categories = ['productivity', 'education', 'entertainment'];
-                            const randomCategory = categories[Math.floor(Math.random() * categories.length)];
-                            categorizedData[randomCategory].push(agent);
+                            folderBasedData.uncategorized.push(agent);
                         }
                     });
-                    setAgentsData(categorizedData);
+
+                    setFolderData(folderBasedData);
                 } else {
                     setError(response.data.message || "Failed to load agents data: Invalid response format");
                 }
@@ -289,20 +314,29 @@ const AdminDashboard = ({ userName = "Admin User" }) => {
         return () => window.removeEventListener('resize', handleResize);
     }, []);
 
-    const filteredAgentsData = useMemo(() => {
+    const filteredFolderData = useMemo(() => {
         const searchTermLower = searchTerm.toLowerCase().trim();
         if (!searchTermLower) {
-            return applySorting(agentsData, sortOption);
+            return applySorting(folderData, sortOption);
         }
+        
         const filtered = {};
-        Object.keys(agentsData).forEach(category => {
-            filtered[category] = agentsData[category].filter(agent =>
+        Object.keys(folderData).forEach(folder => {
+            filtered[folder] = folderData[folder].filter(agent =>
                 agent.name.toLowerCase().includes(searchTermLower) ||
                 (agent.modelType && agent.modelType.toLowerCase().includes(searchTermLower))
             );
         });
+        
+        // Filter out empty folders
+        Object.keys(filtered).forEach(folder => {
+            if (filtered[folder].length === 0) {
+                delete filtered[folder];
+            }
+        });
+        
         return applySorting(filtered, sortOption);
-    }, [searchTerm, agentsData, sortOption]);
+    }, [searchTerm, folderData, sortOption]);
 
     useEffect(() => {
         function handleClickOutside(event) {
@@ -325,8 +359,8 @@ const AdminDashboard = ({ userName = "Admin User" }) => {
         navigate(`/admin/chat/${agentId}`);
     };
 
-    const hasSearchResults = Object.values(filteredAgentsData).some(
-        category => category.length > 0
+    const hasSearchResults = Object.values(filteredFolderData).some(
+        agents => agents.length > 0
     );
 
     if (loading) {
@@ -352,6 +386,18 @@ const AdminDashboard = ({ userName = "Admin User" }) => {
             </div>
         );
     }
+
+    // Function to format folder name for display
+    const formatFolderName = (folderKey) => {
+        if (folderKey === 'recent') return 'Recent GPTs';
+        if (folderKey === 'uncategorized') return 'Uncategorized';
+        
+        // Convert snake_case to Title Case
+        return folderKey
+            .split('_')
+            .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+            .join(' ');
+    };
 
     return (
         <div className="flex h-screen bg-gray-50 dark:bg-gray-900 text-black dark:text-white font-sans">
@@ -476,200 +522,122 @@ const AdminDashboard = ({ userName = "Admin User" }) => {
                                     No agents found for "{searchTerm}"
                                 </div>
                             ) : (
-                                <>
-                                    {/* Featured Agents Section */}
-                                    {filteredAgentsData.featured && filteredAgentsData.featured.length > 0 && (
-                                        <div className="mb-8 flex-shrink-0">
-                                            <div className="flex items-center justify-between mb-4">
-                                                <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Featured Agents</h2>
-                                                <div className="relative" ref={dropdownRef}>
-                                                    <button
-                                                        onClick={() => setIsSortOpen(!isSortOpen)}
-                                                        className="flex items-center text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white py-1.5 px-3 bg-white dark:bg-gray-800 rounded-md border border-gray-200 dark:border-gray-700 shadow-sm"
-                                                    >
-                                                        Sort: {sortOption}
-                                                        {isSortOpen ? <FiChevronUp className="ml-2" /> : <FiChevronDown className="ml-2" />}
-                                                    </button>
-                                                    {isSortOpen && (
-                                                        <div className="absolute top-full right-0 mt-1 w-36 bg-white dark:bg-gray-800 rounded-md shadow-lg z-10 border border-gray-200 dark:border-gray-700">
-                                                            <ul>
-                                                                {sortOptions.map((option) => (
-                                                                    <li key={option}>
-                                                                        <button
-                                                                            onClick={() => handleSortChange(option)}
-                                                                            className={`block w-full text-left px-4 py-2 text-sm ${sortOption === option ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'} transition-all`}
-                                                                        >
-                                                                            {option}
-                                                                        </button>
-                                                                    </li>
-                                                                ))}
-                                                            </ul>
-                                                        </div>
-                                                    )}
+                                <div className="space-y-8">
+                                    {/* Sort Dropdown */}
+                                    <div className="flex justify-end">
+                                        <div className="relative" ref={dropdownRef}>
+                                            <button
+                                                onClick={() => setIsSortOpen(!isSortOpen)}
+                                                className="flex items-center text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white py-1.5 px-3 bg-white dark:bg-gray-800 rounded-md border border-gray-200 dark:border-gray-700 shadow-sm"
+                                            >
+                                                Sort: {sortOption}
+                                                {isSortOpen ? <FiChevronUp className="ml-2" /> : <FiChevronDown className="ml-2" />}
+                                            </button>
+                                            {isSortOpen && (
+                                                <div className="absolute top-full right-0 mt-1 w-36 bg-white dark:bg-gray-800 rounded-md shadow-lg z-10 border border-gray-200 dark:border-gray-700">
+                                                    <ul>
+                                                        {sortOptions.map((option) => (
+                                                            <li key={option}>
+                                                                <button
+                                                                    onClick={() => handleSortChange(option)}
+                                                                    className={`block w-full text-left px-4 py-2 text-sm ${sortOption === option ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400' : 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'} transition-all`}
+                                                                >
+                                                                    {option}
+                                                                </button>
+                                                            </li>
+                                                        ))}
+                                                    </ul>
                                                 </div>
-                                            </div>
-
-                                            <div className={viewMode === 'grid' ?
-                                                "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4" :
-                                                "space-y-3"
-                                            }>
-                                                {filteredAgentsData.featured.map((agent) => (
-                                                    viewMode === 'grid' ? (
-                                                        <EnhancedAgentCard
-                                                            key={agent.id || agent.name}
-                                                            agent={agent}
-                                                            onClick={() => handleNavigateToChat(agent.id)}
-                                                            onEdit={handleEditGpt}
-                                                            onDelete={handleDeleteGpt}
-                                                            onMoveToFolder={handleMoveToFolder}
-                                                        />
-                                                    ) : (
-                                                        <div
-                                                            key={agent.id || agent.name}
-                                                            className="flex items-center bg-white dark:bg-gray-800 p-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-blue-400/50 dark:hover:border-gray-600 shadow-sm cursor-pointer group"
-                                                            onClick={() => handleNavigateToChat(agent.id)}
-                                                        >
-                                                            <div className="h-14 w-14 bg-gradient-to-br from-gray-100 to-gray-300 dark:from-gray-700 dark:to-gray-900 rounded-md overflow-hidden mr-4 flex-shrink-0">
-                                                                {agent.image ? (
-                                                                    <img src={agent.image} alt={agent.name} className="w-full h-full object-cover" />
-                                                                ) : (
-                                                                    <div className="w-full h-full flex items-center justify-center">
-                                                                        <span className="text-xl text-gray-500/40 dark:text-white/30">{agent.name.charAt(0)}</span>
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                            <div className="flex-grow min-w-0">
-                                                                <div className="flex items-center justify-between">
-                                                                    <h3 className="font-semibold text-sm text-gray-900 dark:text-white truncate">{agent.name}</h3>
-                                                                    <div className="flex items-center ml-2 bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-[10px] text-gray-600 dark:text-gray-300">
-                                                                        {React.cloneElement(modelIcons[agent.modelType === 'openrouter/auto' ? 'router-engine' : agent.modelType] || <FaRobot className="text-gray-500" />, { size: 12 })}
-                                                                        <span className="ml-1">{agent.modelType === 'openrouter/auto' ? 'router-engine' : agent.modelType}</span>
-                                                                    </div>
-                                                                </div>
-
-                                                            </div>
-
-                                                            {/* Add action buttons for list view */}
-                                                            <div className="flex gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                                <button
-                                                                    onClick={(e) => { e.stopPropagation(); handleMoveToFolder(agent); }}
-                                                                    className="p-1.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-green-500 hover:text-white transition-colors"
-                                                                    title="Move to Folder"
-                                                                >
-                                                                    <FiFolderPlus size={14} />
-                                                                </button>
-                                                                <button
-                                                                    onClick={(e) => { e.stopPropagation(); handleEditGpt(agent.id); }}
-                                                                    className="p-1.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-blue-500 hover:text-white transition-colors"
-                                                                    title="Edit GPT"
-                                                                >
-                                                                    <FiEdit size={14} />
-                                                                </button>
-                                                                <button
-                                                                    onClick={(e) => { e.stopPropagation(); handleDeleteGpt(agent.id); }}
-                                                                    className="p-1.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-red-500 hover:text-white transition-colors"
-                                                                    title="Delete GPT"
-                                                                >
-                                                                    <FiTrash2 size={14} />
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                    )
-                                                ))}
-                                            </div>
+                                            )}
                                         </div>
-                                    )}
+                                    </div>
 
-                                    {/* Categories Header */}
-                                    <h2 className="text-xl font-semibold mb-6 flex-shrink-0 text-gray-900 dark:text-white">Categories</h2>
+                                    {/* Folder sections */}
+                                    {Object.entries(filteredFolderData).map(([folderKey, agents]) => {
+                                        if (agents.length === 0) return null;
+                                        
+                                        return (
+                                            <div key={folderKey} className="mb-8">
+                                                <div className="flex items-center justify-between mb-4">
+                                                    <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
+                                                        {formatFolderName(folderKey)}
+                                                    </h2>
+                                                    <span className="text-sm text-gray-500 dark:text-gray-400">
+                                                        {agents.length} {agents.length === 1 ? 'agent' : 'agents'}
+                                                    </span>
+                                                </div>
 
-                                    {/* Scrollable Categories */}
-                                    <div className="space-y-8">
-                                        {Object.entries(filteredAgentsData).map(([category, agents]) => {
-                                            if (category === 'featured' || agents.length === 0) return null;
-                                            const categoryTitle = category
-                                                .replace(/([A-Z])/g, ' $1')
-                                                .replace(/^./, (str) => str.toUpperCase());
-
-                                            return (
-                                                <div key={category} className="mb-8">
-                                                    <div className="flex items-center justify-between mb-3">
-                                                        <h3 className="text-lg font-medium text-gray-800 dark:text-gray-200">{categoryTitle}</h3>
-                                                        <span className="text-sm text-gray-500 dark:text-gray-400">{agents.length} {agents.length === 1 ? 'agent' : 'agents'}</span>
-                                                    </div>
-
-                                                    <div className={viewMode === 'grid' ?
-                                                        "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4" :
-                                                        "space-y-3"
-                                                    }>
-                                                        {agents.map((agent) => (
-                                                            viewMode === 'grid' ? (
-                                                                <EnhancedAgentCard
-                                                                    key={agent.id || agent.name}
-                                                                    agent={agent}
-                                                                    onClick={() => handleNavigateToChat(agent.id)}
-                                                                    onEdit={handleEditGpt}
-                                                                    onDelete={handleDeleteGpt}
-                                                                    onMoveToFolder={handleMoveToFolder}
-                                                                />
-                                                            ) : (
-                                                                <div
-                                                                    key={agent.id || agent.name}
-                                                                    className="flex items-center bg-white dark:bg-gray-800 p-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-blue-400/50 dark:hover:border-gray-600 shadow-sm cursor-pointer group"
-                                                                    onClick={() => handleNavigateToChat(agent.id)}
-                                                                >
-                                                                    <div className="h-14 w-14 bg-gradient-to-br from-gray-100 to-gray-300 dark:from-gray-700 dark:to-gray-900 rounded-md overflow-hidden mr-4 flex-shrink-0">
-                                                                        {agent.image ? (
-                                                                            <img src={agent.image} alt={agent.name} className="w-full h-full object-cover" />
-                                                                        ) : (
-                                                                            <div className="w-full h-full flex items-center justify-center">
-                                                                                <span className="text-xl text-gray-500/40 dark:text-white/30">{agent.name.charAt(0)}</span>
-                                                                            </div>
-                                                                        )}
-                                                                    </div>
-                                                                    <div className="flex-grow min-w-0">
-                                                                        <div className="flex items-center justify-between">
-                                                                            <h3 className="font-semibold text-sm text-gray-900 dark:text-white truncate">{agent.name}</h3>
-                                                                            <div className="flex items-center ml-2 bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-[10px] text-gray-600 dark:text-gray-300">
-                                                                                {React.cloneElement(modelIcons[agent.modelType === 'openrouter/auto' ? 'router-engine' : agent.modelType] || <FaRobot className="text-gray-500" />, { size: 12 })}
-                                                                                <span className="ml-1">{agent.modelType === 'openrouter/auto' ? 'router-engine' : agent.modelType}</span>
-                                                                            </div>
+                                                <div className={viewMode === 'grid' ?
+                                                    "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4" :
+                                                    "space-y-3"
+                                                }>
+                                                    {agents.map((agent) => (
+                                                        viewMode === 'grid' ? (
+                                                            <EnhancedAgentCard
+                                                                key={agent.id || agent.name}
+                                                                agent={agent}
+                                                                onClick={() => handleNavigateToChat(agent.id)}
+                                                                onEdit={handleEditGpt}
+                                                                onDelete={handleDeleteGpt}
+                                                                onMoveToFolder={handleMoveToFolder}
+                                                            />
+                                                        ) : (
+                                                            <div
+                                                                key={agent.id || agent.name}
+                                                                className="flex items-center bg-white dark:bg-gray-800 p-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-blue-400/50 dark:hover:border-gray-600 shadow-sm cursor-pointer group"
+                                                                onClick={() => handleNavigateToChat(agent.id)}
+                                                            >
+                                                                <div className="h-14 w-14 bg-gradient-to-br from-gray-100 to-gray-300 dark:from-gray-700 dark:to-gray-900 rounded-md overflow-hidden mr-4 flex-shrink-0">
+                                                                    {agent.image ? (
+                                                                        <img src={agent.image} alt={agent.name} className="w-full h-full object-cover" />
+                                                                    ) : (
+                                                                        <div className="w-full h-full flex items-center justify-center">
+                                                                            <span className="text-xl text-gray-500/40 dark:text-white/30">{agent.name.charAt(0)}</span>
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                                <div className="flex-grow min-w-0">
+                                                                    <div className="flex items-center justify-between">
+                                                                        <h3 className="font-semibold text-sm text-gray-900 dark:text-white truncate">{agent.name}</h3>
+                                                                        <div className="flex items-center ml-2 bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded text-[10px] text-gray-600 dark:text-gray-300">
+                                                                            {React.cloneElement(modelIcons[agent.modelType === 'openrouter/auto' ? 'router-engine' : agent.modelType] || <FaRobot className="text-gray-500" />, { size: 12 })}
+                                                                            <span className="ml-1">{agent.modelType === 'openrouter/auto' ? 'router-engine' : agent.modelType}</span>
                                                                         </div>
                                                                     </div>
-
-                                                                    {/* Action buttons for list view */}
-                                                                    <div className="flex gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                                                        <button
-                                                                            onClick={(e) => { e.stopPropagation(); handleMoveToFolder(agent); }}
-                                                                            className="p-1.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-green-500 hover:text-white transition-colors"
-                                                                            title="Move to Folder"
-                                                                        >
-                                                                            <FiFolderPlus size={14} />
-                                                                        </button>
-                                                                        <button
-                                                                            onClick={(e) => { e.stopPropagation(); handleEditGpt(agent.id); }}
-                                                                            className="p-1.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-blue-500 hover:text-white transition-colors"
-                                                                            title="Edit GPT"
-                                                                        >
-                                                                            <FiEdit size={14} />
-                                                                        </button>
-                                                                        <button
-                                                                            onClick={(e) => { e.stopPropagation(); handleDeleteGpt(agent.id); }}
-                                                                            className="p-1.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-red-500 hover:text-white transition-colors"
-                                                                            title="Delete GPT"
-                                                                        >
-                                                                            <FiTrash2 size={14} />
-                                                                        </button>
-                                                                    </div>
                                                                 </div>
-                                                            )
-                                                        ))}
-                                                    </div>
+
+                                                                {/* Action buttons for list view */}
+                                                                <div className="flex gap-1 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                                    <button
+                                                                        onClick={(e) => { e.stopPropagation(); handleMoveToFolder(agent); }}
+                                                                        className="p-1.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-green-500 hover:text-white transition-colors"
+                                                                        title="Move to Folder"
+                                                                    >
+                                                                        <FiFolderPlus size={14} />
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={(e) => { e.stopPropagation(); handleEditGpt(agent.id); }}
+                                                                        className="p-1.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-blue-500 hover:text-white transition-colors"
+                                                                        title="Edit GPT"
+                                                                    >
+                                                                        <FiEdit size={14} />
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={(e) => { e.stopPropagation(); handleDeleteGpt(agent.id); }}
+                                                                        className="p-1.5 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded hover:bg-red-500 hover:text-white transition-colors"
+                                                                        title="Delete GPT"
+                                                                    >
+                                                                        <FiTrash2 size={14} />
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        )
+                                                    ))}
                                                 </div>
-                                            );
-                                        })}
-                                    </div>
-                                </>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
                             )}
                         </div>
                     </>

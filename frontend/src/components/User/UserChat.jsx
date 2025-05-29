@@ -227,6 +227,7 @@ const UserChat = () => {
     const [streamingMessage, setStreamingMessage] = useState(null);
     const messagesEndRef = useRef(null);
     const [webSearchEnabled, setWebSearchEnabled] = useState(false);
+    const [apiKeys, setApiKeys] = useState({});
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -235,6 +236,77 @@ const UserChat = () => {
     useEffect(() => {
         if (user) {
             setUserData(user);
+        }
+    }, [user]);
+
+    const fetchApiKeysFromBackend = async (retry = 3) => {
+        try {
+            if (!user?._id) {
+                console.warn("Cannot fetch API keys - user not authenticated yet");
+                return {};
+            }
+            
+            console.log("Fetching API keys from backend...");
+            let response;
+            
+            try {
+                // First try to get user's own API keys
+                response = await axiosInstance.get('/api/auth/user/api-keys', {
+                    withCredentials: true
+                });
+                
+                if (response.data?.success) {
+                    const keys = response.data.apiKeys || {};
+                    // Check if we got any non-empty keys
+                    const hasValidKeys = Object.values(keys).some(val => val !== '');
+                    
+                    if (hasValidKeys) {
+                        console.log("User API keys fetched successfully:", Object.keys(keys));
+                        setApiKeys(keys);
+                        return keys;
+                    } else {
+                        console.log("User has no valid API keys, will try system keys");
+                    }
+                }
+            } catch (userKeysError) {
+                console.error("Failed to fetch user API keys:", userKeysError);
+            }
+            
+            // If we're here, try to get system API keys (from admin)
+            try {
+                response = await axiosInstance.get('/api/auth/system/api-keys', {
+                    withCredentials: true
+                });
+                
+                if (response.data?.success) {
+                    const keys = response.data.apiKeys || {};
+                    console.log("System API keys fetched successfully:", Object.keys(keys));
+                    setApiKeys(keys);
+                    return keys;
+                }
+            } catch (systemKeysError) {
+                console.error("Failed to fetch system API keys:", systemKeysError);
+            }
+            
+            // If we reach here, both attempts failed
+            console.warn("Could not fetch any valid API keys");
+            return {};
+        } catch (error) {
+            console.error("Failed to fetch API keys from server:", error);
+            if (retry > 0) {
+                console.log(`Retrying API key fetch (${retry} attempts left)...`);
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                return fetchApiKeysFromBackend(retry - 1);
+            }
+            return {};
+        }
+    };
+
+    useEffect(() => {
+        if (user?._id) {
+            fetchApiKeysFromBackend().then(keys => {
+                console.log("Initial API keys fetched:", Object.keys(keys));
+            });
         }
     }, [user]);
 
@@ -386,8 +458,6 @@ const UserChat = () => {
                 return null;
             }
 
-
-
             const payload = {
                 userId: user._id,
                 gptId: gptData._id,
@@ -396,7 +466,6 @@ const UserChat = () => {
                 role: role,
                 model: gptData.model || 'gpt-4o-mini'
             };
-
 
             const response = await axiosInstance.post('/api/chat-history/save', payload, {
                 withCredentials: true
@@ -425,23 +494,19 @@ const UserChat = () => {
             };
 
             setMessages(prev => [...prev, userMessage]);
-
-            // Save user message immediately
             saveMessageToHistory(message, 'user');
 
-            // Keep only the last 10 messages for context
             const recentHistory = [...conversationMemory, { role: 'user', content: message }]
-                .slice(-10) // Take the last 10
-                .map(msg => ({ role: msg.role, content: msg.content })); // Format for backend
+                .slice(-10)
+                .map(msg => ({ role: msg.role, content: msg.content }));
 
             setConversationMemory(prev => [...prev, { role: 'user', content: message, timestamp: new Date() }].slice(-10));
-
-            // Clear any existing streaming message
             setStreamingMessage(null);
-            // Set loading state
             setLoading(prev => ({ ...prev, message: true }));
 
-            // Backend API Call
+            // Use stored API keys instead of fetching again
+            console.log("Using API keys for chat:", Object.keys(apiKeys));
+
             try {
                 const payload = {
                     message: message,
@@ -453,7 +518,8 @@ const UserChat = () => {
                     user_documents: userDocuments,
                     use_hybrid_search: gptData?.capabilities?.hybridSearch || false,
                     system_prompt: gptData?.instructions || null,
-                    web_search_enabled: webSearchEnabled && gptData?.capabilities?.webBrowsing || false
+                    web_search_enabled: webSearchEnabled && gptData?.capabilities?.webBrowsing || false,
+                    api_keys: apiKeys // Use stored keys
                 };
 
                 const response = await fetch(`${pythonApiUrl}/chat-stream`, {
@@ -475,7 +541,6 @@ const UserChat = () => {
                 } else {
                     throw new Error("Received empty response body");
                 }
-
             } catch (error) {
                 console.error("Error calling chat stream API:", error);
                 setStreamingMessage({
@@ -653,20 +718,20 @@ const UserChat = () => {
 
     const notifyGptOpened = async (customGpt, userData) => {
         try {
-            // Use actual hybridSearch setting
+            if (!userData?._id) {
+                console.warn("Cannot notify GPT opened - user not authenticated");
+                return false;
+            }
+            
             const useHybridSearch = customGpt.capabilities?.hybridSearch || false;
 
             const fileUrls = customGpt.knowledgeFiles?.map(file => file.fileUrl).filter(url =>
                 url && (url.startsWith('http://') || url.startsWith('https://'))
             ) || [];
 
-            // Get API keys from localStorage
-            let apiKeys = {};
-            try {
-                apiKeys = JSON.parse(localStorage.getItem('apiKeys') || '{}');
-            } catch (e) {
-                console.warn("Failed to parse API keys from localStorage");
-            }
+            // Use stored API keys or fetch them if not available
+            let keysToUse = Object.keys(apiKeys).length > 0 ? apiKeys : await fetchApiKeysFromBackend();
+            console.log("Using API keys for GPT opened:", Object.keys(keysToUse));
 
             const backendUrl = import.meta.env.VITE_PYTHON_API_URL || 'http://localhost:8000';
 
@@ -682,8 +747,10 @@ const UserChat = () => {
                     capabilities: customGpt.capabilities || {},
                     use_hybrid_search: useHybridSearch
                 },
-                api_keys: apiKeys // Add API keys to the payload
+                api_keys: keysToUse
             };
+
+            console.log("Sending GPT opened notification with API keys:", Object.keys(payload.api_keys));
 
             const response = await fetch(`${backendUrl}/gpt-opened`, {
                 method: 'POST',
@@ -695,15 +762,13 @@ const UserChat = () => {
 
             if (response.ok) {
                 const data = await response.json();
-
-                // Store the collection name if provided
                 if (data && data.collection_name) {
                     setCollectionName(data.collection_name);
                 }
-
                 return true;
             } else {
-                console.error("Failed to notify GPT opened:", await response.text());
+                const errorText = await response.text();
+                console.error("Failed to notify GPT opened:", errorText);
                 return false;
             }
         } catch (err) {
@@ -730,7 +795,6 @@ const UserChat = () => {
                 formData.append('files', files[i]);
             }
             
-            // Add required metadata - match AdminChat.jsx
             formData.append('user_email', userData?.email || 'anonymous');
             formData.append('gpt_id', gptData?._id || gptId);
             formData.append('gpt_name', gptData?.name || 'Assistant');
@@ -738,11 +802,13 @@ const UserChat = () => {
             formData.append('is_user_document', 'true');
             formData.append('system_prompt', gptData?.instructions || '');
 
-            // Get hybridSearch setting from capabilities
             const useHybridSearch = gptData?.capabilities?.hybridSearch || false;
             formData.append('use_hybrid_search', useHybridSearch.toString());
 
-            // Optimized upload with simple progress tracking
+            // Use stored API keys
+            console.log("Using API keys for file upload:", Object.keys(apiKeys));
+            formData.append('api_keys', JSON.stringify(apiKeys));
+
             const response = await axios.post(
                 `${pythonApiUrl}/upload-chat-files`,
                 formData,

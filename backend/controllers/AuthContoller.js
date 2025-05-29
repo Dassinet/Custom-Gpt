@@ -615,43 +615,82 @@ const changePassword = async (req, res) => {
 };
 
 
-// Get user's API keys
+// Get user's API keys - modified to check for admin keys if user has none
 const getApiKeys = async (req, res) => {
     try {
+        if (!req.user || !req.user._id) {
+            return res.status(401).json({ success: false, message: 'Authentication required' });
+        }
+        
         const user = await User.findById(req.user._id).select('+apiKeys');
         
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
         
-        // Initialize apiKeys object if it doesn't exist
-        if (!user.apiKeys) {
-            return res.json({ success: true, apiKeys: {} });
-        }
+        // Initialize with user's own API keys (if they exist)
+        let decryptedKeys = {};
         
-        // Decrypt API keys for frontend use
-        const decryptedKeys = {};
-        for (const [key, value] of Object.entries(user.apiKeys)) {
-            if (value) {
-                try {
-                    decryptedKeys[key] = decrypt(value);
-                    // If decryption returned empty string due to failure, consider it invalid
-                    if (!decryptedKeys[key]) {
+        // First check if this user has their own API keys
+        if (user.apiKeys && Object.keys(user.apiKeys).length > 0) {
+            // Decrypt user's own API keys
+            for (const [key, value] of Object.entries(user.apiKeys)) {
+                if (value) {
+                    try {
+                        decryptedKeys[key] = decrypt(value);
+                        if (!decryptedKeys[key]) {
+                            decryptedKeys[key] = '';
+                        }
+                    } catch (error) {
+                        console.error(`Failed to decrypt key ${key} for user ${user._id}:`, error);
                         decryptedKeys[key] = '';
                     }
-                } catch (error) {
-                    console.error(`Failed to decrypt key ${key}:`, error);
+                } else {
                     decryptedKeys[key] = '';
                 }
+            }
+            
+            console.log(`Using personal API keys for user ${user._id}: ${Object.keys(decryptedKeys).join(', ')}`);
+        } 
+        // If user has no API keys OR user's keys are all empty, try to use keys from an admin
+        else if (!user.apiKeys || Object.keys(user.apiKeys).length === 0 || 
+                 !Object.values(decryptedKeys).some(val => val !== '')) {
+            console.log(`User ${user._id} has no API keys, attempting to use admin keys`);
+            
+            // Find an admin user with API keys
+            const adminUser = await User.findOne({ 
+                role: 'admin',
+                apiKeys: { $exists: true, $ne: {} }
+            }).select('+apiKeys');
+            
+            if (adminUser && adminUser.apiKeys) {
+                decryptedKeys = {};
+                // Decrypt admin's API keys
+                for (const [key, value] of Object.entries(adminUser.apiKeys)) {
+                    if (value) {
+                        try {
+                            decryptedKeys[key] = decrypt(value);
+                            if (!decryptedKeys[key]) {
+                                decryptedKeys[key] = '';
+                            }
+                        } catch (error) {
+                            console.error(`Failed to decrypt admin key ${key}:`, error);
+                            decryptedKeys[key] = '';
+                        }
+                    } else {
+                        decryptedKeys[key] = '';
+                    }
+                }
+                console.log(`Using admin API keys for user ${user._id}: ${Object.keys(decryptedKeys).join(', ')}`);
             } else {
-                decryptedKeys[key] = '';
+                console.log('No admin with API keys found');
             }
         }
         
         return res.json({ success: true, apiKeys: decryptedKeys });
     } catch (error) {
         console.error('Error getting API keys:', error);
-        return res.status(500).json({ success: false, message: 'Server error' });
+        return res.status(500).json({ success: false, message: 'Server error retrieving API keys' });
     }
 };
 
@@ -787,4 +826,48 @@ const updateUserPermissions = async (req, res) => {
     }
 };
 
-module.exports = { Signup, Login, Logout, googleAuth, googleAuthCallback, refreshTokenController, getCurrentUser, getAllUsers,  setInactive, removeTeamMember, getUsersWithGptCounts, getUserGptCount, getUserActivity, updateUserProfile, updateUserProfilePicture, changePassword, getApiKeys, saveApiKeys, updatePassword, updateUserPermissions };
+// Get system-wide API keys (always from admin)
+const getSystemApiKeys = async (req, res) => {
+    try {
+        if (!req.user || !req.user._id) {
+            return res.status(401).json({ success: false, message: 'Authentication required' });
+        }
+        
+        // Find an admin user with API keys
+        const adminUser = await User.findOne({ 
+            role: 'admin',
+            apiKeys: { $exists: true, $ne: {} }
+        }).select('+apiKeys');
+        
+        if (!adminUser || !adminUser.apiKeys) {
+            console.log('No admin with API keys found');
+            return res.json({ success: true, apiKeys: {} });
+        }
+        
+        // Decrypt admin's API keys
+        const decryptedKeys = {};
+        for (const [key, value] of Object.entries(adminUser.apiKeys)) {
+            if (value) {
+                try {
+                    decryptedKeys[key] = decrypt(value);
+                    if (!decryptedKeys[key]) {
+                        decryptedKeys[key] = '';
+                    }
+                } catch (error) {
+                    console.error(`Failed to decrypt admin key ${key}:`, error);
+                    decryptedKeys[key] = '';
+                }
+            } else {
+                decryptedKeys[key] = '';
+            }
+        }
+        
+        console.log(`Retrieved system API keys: ${Object.keys(decryptedKeys).join(', ')}`);
+        return res.json({ success: true, apiKeys: decryptedKeys });
+    } catch (error) {
+        console.error('Error getting system API keys:', error);
+        return res.status(500).json({ success: false, message: 'Server error retrieving system API keys' });
+    }
+};
+
+module.exports = { Signup, Login, Logout, googleAuth, googleAuthCallback, refreshTokenController, getCurrentUser, getAllUsers,  setInactive, removeTeamMember, getUsersWithGptCounts, getUserGptCount, getUserActivity, updateUserProfile, updateUserProfilePicture, changePassword, getApiKeys, saveApiKeys, updatePassword, updateUserPermissions, getSystemApiKeys };

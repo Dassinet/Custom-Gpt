@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { Signup, Login, Logout, googleAuth, googleAuthCallback, refreshTokenController, getCurrentUser, getAllUsers, removeTeamMember, getUsersWithGptCounts, getUserGptCount, updateUserProfile, updateUserProfilePicture, changePassword, updatePassword, getApiKeys, saveApiKeys, updateUserPermissions } = require('../controllers/AuthContoller');
+const { Signup, Login, Logout, googleAuth, googleAuthCallback, refreshTokenController, getCurrentUser, getAllUsers, removeTeamMember, getUsersWithGptCounts, getUserGptCount, updateUserProfile, updateUserProfilePicture, changePassword, updatePassword, getApiKeys, saveApiKeys, updateUserPermissions, getSystemApiKeys } = require('../controllers/AuthContoller');
 const passport = require('passport');
 const { protectRoute } = require('../middleware/authMiddleware'); // Imports protectRoute
 const multer = require('multer'); // Import multer
@@ -37,5 +37,7 @@ router.get('/user/api-keys', protectRoute, getApiKeys);
 router.post('/user/api-keys', protectRoute, saveApiKeys);
 
 router.put('/users/:userId/permissions', protectRoute, updateUserPermissions);
+
+router.get('/system/api-keys', protectRoute, getSystemApiKeys);
 
 module.exports = router;
