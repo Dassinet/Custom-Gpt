@@ -516,9 +516,9 @@ const UserChat = () => {
                     history: recentHistory,
                     memory: conversationMemory,
                     user_documents: userDocuments,
-                    use_hybrid_search: gptData?.capabilities?.hybridSearch || false,
                     system_prompt: gptData?.instructions || null,
                     web_search_enabled: webSearchEnabled && gptData?.capabilities?.webBrowsing || false,
+                    model: gptData?.model || 'openrouter/auto',
                     api_keys: apiKeys // Use stored keys
                 };
 
@@ -722,8 +722,6 @@ const UserChat = () => {
                 console.warn("Cannot notify GPT opened - user not authenticated");
                 return false;
             }
-            
-            const useHybridSearch = customGpt.capabilities?.hybridSearch || false;
 
             const fileUrls = customGpt.knowledgeFiles?.map(file => file.fileUrl).filter(url =>
                 url && (url.startsWith('http://') || url.startsWith('https://'))
@@ -740,12 +738,10 @@ const UserChat = () => {
                 gpt_name: customGpt.name || 'Unnamed GPT',
                 gpt_id: customGpt._id,
                 file_urls: fileUrls,
-                use_hybrid_search: useHybridSearch,
                 schema: {
-                    model: customGpt.model || "gpt-4o-mini",
+                    model: customGpt.model || "openrouter/auto",
                     instructions: customGpt.instructions || "",
-                    capabilities: customGpt.capabilities || {},
-                    use_hybrid_search: useHybridSearch
+                    capabilities: customGpt.capabilities || {}
                 },
                 api_keys: keysToUse
             };
@@ -777,7 +773,7 @@ const UserChat = () => {
         }
     };
 
-    // Replace the existing handleFileUpload function with this
+    // Update handleFileUpload function - remove hybrid search
     const handleFileUpload = async (files) => {
         if (!files.length || !gptData) return;
 
@@ -801,9 +797,6 @@ const UserChat = () => {
             formData.append('collection_name', collectionName || gptData._id);
             formData.append('is_user_document', 'true');
             formData.append('system_prompt', gptData?.instructions || '');
-
-            const useHybridSearch = gptData?.capabilities?.hybridSearch || false;
-            formData.append('use_hybrid_search', useHybridSearch.toString());
 
             // Use stored API keys
             console.log("Using API keys for file upload:", Object.keys(apiKeys));

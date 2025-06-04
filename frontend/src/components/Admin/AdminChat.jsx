@@ -190,8 +190,6 @@ const AdminChat = () => {
             const fileUrls = gptData.knowledgeFiles?.map(file => file.fileUrl).filter(url =>
                 url && (url.startsWith('http://') || url.startsWith('https://'))
             ) || [];
-
-            const useHybridSearch = gptData.capabilities?.hybridSearch || false;
             
             // Get API keys from backend instead of localStorage
             const apiKeys = await fetchApiKeysFromBackend();
@@ -204,12 +202,10 @@ const AdminChat = () => {
                     gpt_name: gptData.name,
                     gpt_id: gptData._id,
                     file_urls: fileUrls,
-                    use_hybrid_search: useHybridSearch,
                     schema: {
                         model: gptData.model,
                         instructions: gptData.instructions,
-                        capabilities: gptData.capabilities,
-                        use_hybrid_search: useHybridSearch
+                        capabilities: gptData.capabilities
                     },
                     api_keys: apiKeys
                 },
@@ -419,8 +415,6 @@ const AdminChat = () => {
             });
             setConversationMemory(updatedMemory);
 
-            const useHybridSearch = gptData?.capabilities?.hybridSearch || false;
-
             // Get API keys from backend
             const apiKeys = await fetchApiKeysFromBackend();
             console.log("Using API keys for chat:", Object.keys(apiKeys));
@@ -431,13 +425,12 @@ const AdminChat = () => {
                 user_email: user?.email || 'unknown_admin',
                 gpt_name: gptData?.name || 'unknown_gpt',
                 user_documents: userDocuments,
-                model: gptData?.model || 'gpt-4o-mini',
+                model: gptData?.model || 'openrouter/auto',
                 memory: updatedMemory,
                 history: messages.slice(-6).map(msg => ({
                     role: msg.role,
                     content: msg.content
                 })),
-                use_hybrid_search: useHybridSearch,
                 system_prompt: gptData?.instructions || null,
                 web_search_enabled: gptData?.capabilities?.webBrowsing || false,
                 api_keys: apiKeys

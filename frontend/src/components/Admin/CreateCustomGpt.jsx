@@ -47,8 +47,7 @@ When providing code examples:
 
     // Simplified capabilities state
     const [capabilities, setCapabilities] = useState({
-        webBrowsing: true,
-        hybridSearch: false
+        webBrowsing: true
     });
 
     const [imagePreview, setImagePreview] = useState(null);
@@ -93,9 +92,7 @@ When providing code examples:
             setSelectedModel(gpt.model);
             setCapabilities({
                 ...capabilities, // Keep default values
-                ...gpt.capabilities, // Override with existing values
-                // Ensure hybridSearch is defined even if not in original data
-                hybridSearch: gpt.capabilities?.hybridSearch ?? false
+                ...gpt.capabilities // Override with existing values
             });
 
             // Set image preview if exists
@@ -423,15 +420,13 @@ When providing code examples:
                     gpt_id: gptId,
                     force_recreate: false,
                     system_prompt: formData.instructions,
-                    use_hybrid_search: capabilities.hybridSearch,
                     schema: {
                         model: selectedModel,
                         capabilities: capabilities,
                         name: formData.name,
                         description: formData.description,
                         instructions: formData.instructions,
-                        conversationStarter: formData.conversationStarter,
-                        use_hybrid_search: capabilities.hybridSearch
+                        conversationStarter: formData.conversationStarter
                     }
                 }
             );
@@ -729,27 +724,6 @@ When providing code examples:
                                     className="sr-only peer"
                                     checked={capabilities.webBrowsing}
                                     onChange={() => handleCapabilityChange('webBrowsing')}
-                                />
-                                <div className="w-9 h-5 md:w-11 md:h-6 bg-gray-300 dark:bg-gray-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-purple-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white dark:after:bg-white after:border-gray-300 dark:after:border-gray-600 after:border after:rounded-full after:h-4 after:w-4 md:after:h-5 md:after:w-5 after:transition-all"></div>
-                            </label>
-                        </div>
-
-                        {/* Hybrid Search Capability */}
-                        <div className="flex items-center justify-between pt-2">
-                            <div>
-                                <div className="flex items-center">
-                                    <LuBrain className="text-gray-500 dark:text-gray-400 mr-2" size={14} />
-                                    <label htmlFor="hybridSearchToggle" className="text-xs md:text-sm font-medium text-gray-600 dark:text-gray-300 cursor-pointer">Hybrid Search</label>
-                                </div>
-                                <p className="text-xs text-gray-500 dark:text-gray-500 mt-1">Enable more accurate knowledge retrieval with hybrid search</p>
-                            </div>
-                            <label htmlFor="hybridSearchToggle" className="relative inline-flex items-center cursor-pointer">
-                                <input
-                                    id="hybridSearchToggle"
-                                    type="checkbox"
-                                    className="sr-only peer"
-                                    checked={capabilities.hybridSearch}
-                                    onChange={() => handleCapabilityChange('hybridSearch')}
                                 />
                                 <div className="w-9 h-5 md:w-11 md:h-6 bg-gray-300 dark:bg-gray-700 rounded-full peer peer-checked:after:translate-x-full peer-checked:bg-purple-600 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white dark:after:bg-white after:border-gray-300 dark:after:border-gray-600 after:border after:rounded-full after:h-4 after:w-4 md:after:h-5 md:after:w-5 after:transition-all"></div>
                             </label>
