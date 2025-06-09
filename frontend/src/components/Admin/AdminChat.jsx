@@ -86,6 +86,49 @@ const MarkdownStyles = () => (
         .hide-scrollbar::-webkit-scrollbar {
             display: none;
         }
+
+        .progress-message {
+            border-left: 3px solid #3498db;
+            padding-left: 10px;
+            color: #555;
+            background-color: rgba(52, 152, 219, 0.05);
+        }
+
+        .progress-item {
+            animation: fadeIn 0.5s ease-in-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .typing-animation span {
+            width: 5px;
+            height: 5px;
+            background-color: currentColor;
+            border-radius: 50%;
+            display: inline-block;
+            margin: 0 1px;
+            animation: typing 1.3s infinite ease-in-out;
+        }
+
+        .typing-animation span:nth-child(1) {
+            animation-delay: 0s;
+        }
+
+        .typing-animation span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-animation span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-5px); }
+        }
     `}} />
 );
 
@@ -379,6 +422,8 @@ const AdminChat = () => {
         if (!message.trim()) return;
 
         try {
+            const isNewChat = messages.length === 0 && !conversationId;
+            
             // Include files in the user message
             const userMessage = {
                 id: Date.now(),
@@ -433,7 +478,8 @@ const AdminChat = () => {
                 })),
                 system_prompt: gptData?.instructions || null,
                 web_search_enabled: gptData?.capabilities?.webBrowsing || false,
-                api_keys: apiKeys
+                api_keys: apiKeys,
+                is_new_chat: isNewChat
             };
 
             if (!payload.user_email) {
@@ -553,11 +599,14 @@ const AdminChat = () => {
         try {
             setIsUploading(true);
             setUploadProgress(0);
-            setUploadedFiles(Array.from(files).map(file => ({
+            
+            // Show files immediately to reduce perceived latency
+            const fileObjects = Array.from(files).map(file => ({
                 name: file.name,
                 size: file.size,
                 type: file.type
-            })));
+            }));
+            setUploadedFiles(fileObjects);
 
             const formData = new FormData();
             for (let i = 0; i < files.length; i++) {
@@ -570,27 +619,15 @@ const AdminChat = () => {
             formData.append('is_user_document', 'true');
             formData.append('system_prompt', gptData?.instructions || '');
 
-            // Get API keys from backend and add to form data
+            // Simulate faster initial progress (psychological trick to reduce perceived latency)
+            setUploadProgress(15); // Jump to 15% immediately
+            setTimeout(() => setUploadProgress(30), 100); // 30% after 100ms
+            
+            // Get API keys from backend
             const apiKeys = await fetchApiKeysFromBackend();
             formData.append('api_keys', JSON.stringify(apiKeys));
 
-            const startTime = Date.now();
-            const uploadDuration = 1500;
-            const progressInterval = setInterval(() => {
-                const elapsed = Date.now() - startTime;
-                if (elapsed < uploadDuration) {
-                    const progress = Math.min(60, (elapsed / uploadDuration) * 60);
-                    setUploadProgress(progress);
-                } else {
-                    setUploadProgress(prev => {
-                        if (prev < 90) {
-                            return prev + (90 - prev) * 0.08;
-                        }
-                        return prev;
-                    });
-                }
-            }, 100);
-
+            // Use a higher timeout and buffer to ensure large file uploads complete
             const response = await axios.post(
                 `${PYTHON_URL}/upload-chat-files`,
                 formData,
@@ -598,18 +635,18 @@ const AdminChat = () => {
                     headers: {
                         'Content-Type': 'multipart/form-data',
                     },
+                    timeout: 60000, // 60 seconds timeout
                     onUploadProgress: (progressEvent) => {
                         const percentCompleted = Math.round(
                             (progressEvent.loaded * 60) / (progressEvent.total || 100)
                         );
-                        setUploadProgress(Math.min(percentCompleted, 60));
+                        setUploadProgress(30 + Math.min(percentCompleted, 60)); // Start from 30% to 90%
                     }
                 }
             );
 
-            clearInterval(progressInterval);
             setUploadProgress(100);
-            setTimeout(() => setIsUploading(false), 500);
+            setTimeout(() => setIsUploading(false), 200); // Shorter delay before hiding
 
             if (response.data.success) {
                 setUserDocuments(response.data.file_urls || []);
@@ -619,6 +656,13 @@ const AdminChat = () => {
         } catch (error) {
             console.error("Error uploading files:", error);
             setIsUploading(false);
+            // Show error to user
+            setMessages(prev => [...prev, {
+                id: Date.now(),
+                role: 'system',
+                content: `Error uploading files: ${error.message}`,
+                timestamp: new Date()
+            }]);
         }
     };
 
@@ -668,10 +712,22 @@ const AdminChat = () => {
         let doneStreaming = false;
         let sourcesInfo = null;
         let streamError = null;
+        let progressMessages = "";
+        let hasReceivedContent = false;
 
         const messageId = streamingMessage?.id || Date.now();
 
         try {
+            // Create initial progress message
+            setStreamingMessage({
+                id: messageId,
+                role: 'assistant',
+                content: "🔍 Searching for information...",
+                isStreaming: true,
+                isProgress: true,
+                timestamp: new Date()
+            });
+
             while (!doneStreaming) {
                 const { done, value } = await reader.read();
 
@@ -706,16 +762,66 @@ const AdminChat = () => {
                         }
 
                         if (parsed.type === 'content') {
-                            buffer += parsed.data;
-                            setStreamingMessage(prev =>
-                                prev ? { ...prev, content: buffer, isStreaming: true, isError: false } :
-                                    { id: messageId, role: 'assistant', content: buffer, isStreaming: true, isError: false, timestamp: new Date() }
-                            );
+                            hasReceivedContent = true;
+                            // If we were showing progress and now getting content, start fresh with content
+                            if (progressMessages && !buffer) {
+                                buffer = parsed.data;
+                                setStreamingMessage({
+                                    id: messageId,
+                                    role: 'assistant',
+                                    content: buffer,
+                                    isStreaming: true,
+                                    isProgress: false,
+                                    timestamp: new Date()
+                                });
+                            } else {
+                                buffer += parsed.data;
+                                setStreamingMessage(prev =>
+                                    prev ? { 
+                                        ...prev, 
+                                        content: buffer, 
+                                        isStreaming: true, 
+                                        isProgress: false, 
+                                        isError: false 
+                                    } : { 
+                                        id: messageId, 
+                                        role: 'assistant', 
+                                        content: buffer, 
+                                        isStreaming: true, 
+                                        isProgress: false, 
+                                        isError: false, 
+                                        timestamp: new Date() 
+                                    }
+                                );
+                            }
+                        }
+
+                        // Show progress updates
+                        if (parsed.type === 'progress') {
+                            progressMessages += progressMessages ? `\n• ${parsed.data}` : `🔍 Searching for information...\n• ${parsed.data}`;
+                            // Only update with progress if we haven't received actual content yet
+                            if (!hasReceivedContent) {
+                                setStreamingMessage(prev => ({
+                                    ...prev,
+                                    content: progressMessages,
+                                    isStreaming: true,
+                                    isProgress: true
+                                }));
+                            }
                         }
 
                         if (parsed.type === 'sources_info') {
                             sourcesInfo = parsed.data;
-                            buffer += `\n\n[Sources Retrieved: ${sourcesInfo.documents_retrieved_count} documents, ${sourcesInfo.retrieval_time_ms}ms]`;
+                            // Only update with progress if we haven't received actual content yet
+                            if (!hasReceivedContent) {
+                                progressMessages += `\n\n[Sources: ${sourcesInfo.documents_retrieved_count} documents, ${sourcesInfo.retrieval_time_ms}ms]`;
+                                setStreamingMessage(prev => ({
+                                    ...prev,
+                                    content: progressMessages,
+                                    isStreaming: true,
+                                    isProgress: true
+                                }));
+                            }
                         }
                     } catch (e) {
                         console.error(`[Stream ${messageId}] Error parsing line:`, e, "Line:", line);
@@ -723,18 +829,25 @@ const AdminChat = () => {
                 }
             }
 
-            if (!buffer && !streamError) {
+            // Only show the "no response" message if we truly have no content
+            if (!buffer && !hasReceivedContent && !streamError) {
                 console.warn(`[Stream ${messageId}] Stream ended with no content.`);
                 buffer = "No response generated. Please try rephrasing your query or check the uploaded documents.";
                 streamError = true;
             }
 
+            // Ensure we have content in the buffer - use progress messages if that's all we have
+            if (!buffer && progressMessages) {
+                buffer = `I searched your documents but couldn't generate a good response. Here's what I found:\n\n${progressMessages}`;
+            }
+
             setStreamingMessage(prev =>
                 prev ? {
                     ...prev,
-                    content: buffer,
+                    content: buffer || prev.content,
                     isStreaming: false,
                     isLoading: false,
+                    isProgress: false,
                     isError: !!streamError
                 } : {
                     id: messageId,
@@ -742,6 +855,7 @@ const AdminChat = () => {
                     content: buffer,
                     isStreaming: false,
                     isLoading: false,
+                    isProgress: false,
                     isError: !!streamError,
                     timestamp: new Date()
                 }
@@ -794,6 +908,14 @@ const AdminChat = () => {
         setHasInteracted(false);
         setUserDocuments([]);
         setUploadedFiles([]);
+        setConversationId(null); // Reset conversation ID
+        
+        // Also tell the backend to clear memory for this session
+        if (gptData && userData) {
+            const sessionId = `user_${userData.email.replace('@', '_').replace('.', '_')}_gpt_${gptData._id}`;
+            // No need to make a separate request, the next query will include is_new_chat=true
+            console.log(`Starting new chat for session ${sessionId}`);
+        }
     };
 
     return (
@@ -822,7 +944,7 @@ const AdminChat = () => {
 
                         {gptData && (
                             <div className="ml-2 text-sm md:text-base font-medium flex items-center">
-                                <span className="mr-1">New Chat</span>
+                                <span className="mr-1">{gptData.name}</span>
                                 {gptData.model && (
                                     <div className="flex items-center ml-2 text-xs md:text-sm px-2 py-0.5 bg-gray-100 dark:bg-gray-800 rounded-full">
                                         {modelIcons[gptData.model === 'openrouter/auto' ? 'router-engine' : gptData.model] || null}
@@ -1030,54 +1152,66 @@ const AdminChat = () => {
 
                                 {streamingMessage ? (
                                     <div className="flex justify-start">
-                                        <div className="w-full max-w-3xl rounded-2xl px-4 py-2 assistant-message text-black dark:text-white rounded-bl-none">
+                                        <div className={`w-full max-w-3xl rounded-2xl px-4 py-2 assistant-message text-black dark:text-white rounded-bl-none ${streamingMessage.isProgress ? 'progress-message' : ''}`}>
                                             <div className="markdown-content">
-                                                <ReactMarkdown
-                                                    remarkPlugins={[remarkGfm]}
-                                                    rehypePlugins={[rehypeRaw]}
-                                                    components={{
-                                                        h1: ({ node, ...props }) => <h1 className="text-xl font-bold my-3" {...props} />,
-                                                        h2: ({ node, ...props }) => <h2 className="text-lg font-bold my-2" {...props} />,
-                                                        h3: ({ node, ...props }) => <h3 className="text-md font-bold my-2" {...props} />,
-                                                        h4: ({ node, ...props }) => <h4 className="font-bold my-2" {...props} />,
-                                                        p: ({ node, ...props }) => <p className="my-2" {...props} />,
-                                                        ul: ({ node, ...props }) => <ul className="list-disc pl-5 my-2" {...props} />,
-                                                        ol: ({ node, ...props }) => <ol className="list-decimal pl-5 my-2" {...props} />,
-                                                        li: ({ node, index, ...props }) => <li key={index} className="my-1" {...props} />,
-                                                        a: ({ node, ...props }) => <a className="text-blue-400 hover:underline" {...props} />,
-                                                        blockquote: ({ node, ...props }) => <blockquote className="border-l-4 border-gray-500 dark:border-gray-400 pl-4 my-3 italic" {...props} />,
-                                                        code({ node, inline, className, children, ...props }) {
-                                                            const match = /language-(\w+)/.exec(className || '');
-                                                            return !inline && match ? (
-                                                                <SyntaxHighlighter
-                                                                    style={atomDark}
-                                                                    language={match[1]}
-                                                                    PreTag="div"
-                                                                    className="rounded-md my-3"
-                                                                    {...props}
-                                                                >
-                                                                    {String(children).replace(/\n$/, '')}
-                                                                </SyntaxHighlighter>
-                                                            ) : (
-                                                                <code className={`${inline ? 'bg-gray-300 dark:bg-gray-600 px-1 py-0.5 rounded text-sm' : ''} ${className}`} {...props}>
-                                                                    {children}
-                                                                </code>
-                                                            );
-                                                        },
-                                                        table: ({ node, ...props }) => (
-                                                            <div className="overflow-x-auto my-3">
-                                                                <table className="min-w-full border border-gray-400 dark:border-gray-500" {...props} />
+                                                {streamingMessage.isProgress ? (
+                                                    // Progress message with animation
+                                                    <div>
+                                                        {streamingMessage.content.split('\n').map((line, i) => (
+                                                            <div key={i} className={`progress-item ${i > 0 ? 'mt-1' : ''}`} style={{animationDelay: `${i * 0.1}s`}}>
+                                                                {line}
                                                             </div>
-                                                        ),
-                                                        thead: ({ node, ...props }) => <thead className="bg-gray-300 dark:bg-gray-600" {...props} />,
-                                                        tbody: ({ node, ...props }) => <tbody className="divide-y divide-gray-400 dark:divide-gray-500" {...props} />,
-                                                        tr: ({ node, ...props }) => <tr className="hover:bg-gray-300 dark:hover:bg-gray-600" {...props} />,
-                                                        th: ({ node, ...props }) => <th className="px-4 py-2 text-left font-medium" {...props} />,
-                                                        td: ({ node, ...props }) => <td className="px-4 py-2" {...props} />,
-                                                    }}
-                                                >
-                                                    {streamingMessage.content}
-                                                </ReactMarkdown>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    // Regular markdown content
+                                                    <ReactMarkdown
+                                                        remarkPlugins={[remarkGfm]}
+                                                        rehypePlugins={[rehypeRaw]}
+                                                        components={{
+                                                            h1: ({ node, ...props }) => <h1 className="text-xl font-bold my-3" {...props} />,
+                                                            h2: ({ node, ...props }) => <h2 className="text-lg font-bold my-2" {...props} />,
+                                                            h3: ({ node, ...props }) => <h3 className="text-md font-bold my-2" {...props} />,
+                                                            h4: ({ node, ...props }) => <h4 className="font-bold my-2" {...props} />,
+                                                            p: ({ node, ...props }) => <p className="my-2" {...props} />,
+                                                            ul: ({ node, ...props }) => <ul className="list-disc pl-5 my-2" {...props} />,
+                                                            ol: ({ node, ...props }) => <ol className="list-decimal pl-5 my-2" {...props} />,
+                                                            li: ({ node, index, ...props }) => <li key={index} className="my-1" {...props} />,
+                                                            a: ({ node, ...props }) => <a className="text-blue-400 hover:underline" {...props} />,
+                                                            blockquote: ({ node, ...props }) => <blockquote className="border-l-4 border-gray-500 dark:border-gray-400 pl-4 my-3 italic" {...props} />,
+                                                            code({ node, inline, className, children, ...props }) {
+                                                                const match = /language-(\w+)/.exec(className || '');
+                                                                return !inline && match ? (
+                                                                    <SyntaxHighlighter
+                                                                        style={atomDark}
+                                                                        language={match[1]}
+                                                                        PreTag="div"
+                                                                        className="rounded-md my-3"
+                                                                        {...props}
+                                                                    >
+                                                                        {String(children).replace(/\n$/, '')}
+                                                                    </SyntaxHighlighter>
+                                                                ) : (
+                                                                    <code className={`${inline ? 'bg-gray-300 dark:bg-gray-600 px-1 py-0.5 rounded text-sm' : ''} ${className}`} {...props}>
+                                                                        {children}
+                                                                    </code>
+                                                                );
+                                                            },
+                                                            table: ({ node, ...props }) => (
+                                                                <div className="overflow-x-auto my-3">
+                                                                    <table className="min-w-full border border-gray-400 dark:border-gray-500" {...props} />
+                                                                </div>
+                                                            ),
+                                                            thead: ({ node, ...props }) => <thead className="bg-gray-300 dark:bg-gray-600" {...props} />,
+                                                            tbody: ({ node, ...props }) => <tbody className="divide-y divide-gray-400 dark:divide-gray-500" {...props} />,
+                                                            tr: ({ node, ...props }) => <tr className="hover:bg-gray-300 dark:hover:bg-gray-600" {...props} />,
+                                                            th: ({ node, ...props }) => <th className="px-4 py-2 text-left font-medium" {...props} />,
+                                                            td: ({ node, ...props }) => <td className="px-4 py-2" {...props} />,
+                                                        }}
+                                                    >
+                                                        {streamingMessage.content}
+                                                    </ReactMarkdown>
+                                                )}
 
                                                 {streamingMessage.isStreaming && (
                                                     <div className="typing-animation mt-2 inline-flex items-center text-gray-400">

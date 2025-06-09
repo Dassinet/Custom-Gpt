@@ -159,6 +159,22 @@ const MarkdownStyles = () => (
             background-color: #1e1e1e;
         }
 
+        .progress-message {
+            border-left: 3px solid #3498db;
+            padding-left: 10px;
+            color: #555;
+            background-color: rgba(52, 152, 219, 0.05);
+        }
+
+        .progress-item {
+            animation: fadeIn 0.5s ease-in-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(-5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
         .typing-animation {
             display: inline-flex;
             align-items: center;
@@ -486,22 +502,34 @@ const UserChat = () => {
         setHasInteracted(true);
 
         try {
+            // Include files in the user message
             const userMessage = {
                 id: Date.now(),
                 role: 'user',
                 content: message,
-                timestamp: new Date()
+                timestamp: new Date(),
+                files: uploadedFiles.length > 0 ? [...uploadedFiles] : []
             };
 
             setMessages(prev => [...prev, userMessage]);
             saveMessageToHistory(message, 'user');
+
+            // Save current files for this message then clear them for next message
+            const currentFiles = [...uploadedFiles];
+            if (uploadedFiles.length > 0) {
+                setUploadedFiles([]); // Clear files after using them
+            }
 
             const recentHistory = [...conversationMemory, { role: 'user', content: message }]
                 .slice(-10)
                 .map(msg => ({ role: msg.role, content: msg.content }));
 
             setConversationMemory(prev => [...prev, { role: 'user', content: message, timestamp: new Date() }].slice(-10));
+            
+            // Important: Clear any existing streaming message first
             setStreamingMessage(null);
+            
+            // Then set loading state
             setLoading(prev => ({ ...prev, message: true }));
 
             // Use stored API keys instead of fetching again
@@ -566,17 +594,19 @@ const UserChat = () => {
         let doneStreaming = false;
         let sourcesInfo = null;
         let streamError = null;
+        let progressMessages = "";
+        let hasReceivedContent = false;
 
-        const messageId = Date.now() + 1;
+        const messageId = streamingMessage?.id || Date.now();
 
         try {
-            // Initialize streaming message state
+            // Create initial progress message
             setStreamingMessage({
                 id: messageId,
                 role: 'assistant',
-                content: '',
+                content: "🔍 Searching for information...",
                 isStreaming: true,
-                isError: false,
+                isProgress: true,
                 timestamp: new Date()
             });
 
@@ -601,12 +631,10 @@ const UserChat = () => {
                             console.error(`[Stream ${messageId}] Streaming Error:`, streamError);
                             buffer = `Error: ${streamError}`;
                             doneStreaming = true;
-                            setStreamingMessage(prev => ({
-                                ...prev,
-                                content: buffer,
-                                isStreaming: false,
-                                isError: true
-                            }));
+                            setStreamingMessage(prev =>
+                                prev ? { ...prev, content: buffer, isStreaming: false, isError: true } :
+                                    { id: messageId, role: 'assistant', content: buffer, isStreaming: false, isError: true, timestamp: new Date() }
+                            );
                             break;
                         }
 
@@ -616,18 +644,66 @@ const UserChat = () => {
                         }
 
                         if (parsed.type === 'content') {
-                            buffer += parsed.data;
-                            setStreamingMessage(prev => ({
-                                ...prev,
-                                content: buffer,
-                                isStreaming: true,
-                                isError: false
-                            }));
+                            hasReceivedContent = true;
+                            // If we were showing progress and now getting content, start fresh with content
+                            if (progressMessages && !buffer) {
+                                buffer = parsed.data;
+                                setStreamingMessage({
+                                    id: messageId,
+                                    role: 'assistant',
+                                    content: buffer,
+                                    isStreaming: true,
+                                    isProgress: false,
+                                    timestamp: new Date()
+                                });
+                            } else {
+                                buffer += parsed.data;
+                                setStreamingMessage(prev =>
+                                    prev ? { 
+                                        ...prev, 
+                                        content: buffer, 
+                                        isStreaming: true, 
+                                        isProgress: false, 
+                                        isError: false 
+                                    } : { 
+                                        id: messageId, 
+                                        role: 'assistant', 
+                                        content: buffer, 
+                                        isStreaming: true, 
+                                        isProgress: false, 
+                                        isError: false, 
+                                        timestamp: new Date() 
+                                    }
+                                );
+                            }
+                        }
+
+                        // Show progress updates
+                        if (parsed.type === 'progress') {
+                            progressMessages += progressMessages ? `\n• ${parsed.data}` : `🔍 Searching for information...\n• ${parsed.data}`;
+                            // Only update with progress if we haven't received actual content yet
+                            if (!hasReceivedContent) {
+                                setStreamingMessage(prev => ({
+                                    ...prev,
+                                    content: progressMessages,
+                                    isStreaming: true,
+                                    isProgress: true
+                                }));
+                            }
                         }
 
                         if (parsed.type === 'sources_info') {
                             sourcesInfo = parsed.data;
-                            buffer += `\n\n[Sources Retrieved: ${sourcesInfo.documents_retrieved_count} documents, ${sourcesInfo.retrieval_time_ms}ms]`;
+                            // Only update with progress if we haven't received actual content yet
+                            if (!hasReceivedContent) {
+                                progressMessages += `\n\n[Sources: ${sourcesInfo.documents_retrieved_count} documents, ${sourcesInfo.retrieval_time_ms}ms]`;
+                                setStreamingMessage(prev => ({
+                                    ...prev,
+                                    content: progressMessages,
+                                    isStreaming: true,
+                                    isProgress: true
+                                }));
+                            }
                         }
                     } catch (e) {
                         console.error(`[Stream ${messageId}] Error parsing line:`, e, "Line:", line);
@@ -635,33 +711,46 @@ const UserChat = () => {
                 }
             }
 
-            if (!buffer && !streamError) {
+            // Only show the "no response" message if we truly have no content
+            if (!buffer && !hasReceivedContent && !streamError) {
                 console.warn(`[Stream ${messageId}] Stream ended with no content.`);
                 buffer = "No response generated. Please try rephrasing your query or check the uploaded documents.";
                 streamError = true;
             }
 
-            setStreamingMessage(prev => ({
-                ...prev,
-                content: buffer,
-                isStreaming: false,
-                isLoading: false,
-                isError: !!streamError
-            }));
+            // Ensure we have content in the buffer - use progress messages if that's all we have
+            if (!buffer && progressMessages) {
+                buffer = `I searched your documents but couldn't generate a good response. Here's what I found:\n\n${progressMessages}`;
+            }
+
+            setStreamingMessage(prev =>
+                prev ? {
+                    ...prev,
+                    content: buffer || prev.content,
+                    isStreaming: false,
+                    isLoading: false,
+                    isProgress: false,
+                    isError: !!streamError
+                } : {
+                    id: messageId,
+                    role: 'assistant',
+                    content: buffer,
+                    isStreaming: false,
+                    isLoading: false,
+                    isProgress: false,
+                    isError: !!streamError,
+                    timestamp: new Date()
+                }
+            );
 
             await saveMessageToHistory(buffer, 'assistant');
         } catch (err) {
             console.error(`[Stream ${messageId}] Error reading stream:`, err);
             buffer = `Error reading response stream: ${err.message}`;
-            setStreamingMessage({
-                id: messageId,
-                role: 'assistant',
-                content: buffer,
-                isStreaming: false,
-                isLoading: false,
-                isError: true,
-                timestamp: new Date()
-            });
+            setStreamingMessage(prev =>
+                prev ? { ...prev, content: buffer, isStreaming: false, isLoading: false, isError: true } :
+                    { id: messageId, role: 'assistant', content: buffer, isStreaming: false, isLoading: false, isError: true, timestamp: new Date() }
+            );
             await saveMessageToHistory(buffer, 'assistant');
         } finally {
             setLoading(prev => ({ ...prev, message: false }));
@@ -773,18 +862,21 @@ const UserChat = () => {
         }
     };
 
-    // Update handleFileUpload function - remove hybrid search
+    // Update handleFileUpload function
     const handleFileUpload = async (files) => {
         if (!files.length || !gptData) return;
 
         try {
             setIsUploading(true);
             setUploadProgress(0);
-            setUploadedFiles(Array.from(files).map(file => ({
+            
+            // Show files immediately to reduce perceived latency
+            const fileObjects = Array.from(files).map(file => ({
                 name: file.name,
                 size: file.size,
                 type: file.type
-            })));
+            }));
+            setUploadedFiles(fileObjects);
 
             const formData = new FormData();
             for (let i = 0; i < files.length; i++) {
@@ -798,6 +890,10 @@ const UserChat = () => {
             formData.append('is_user_document', 'true');
             formData.append('system_prompt', gptData?.instructions || '');
 
+            // Simulate faster initial progress (psychological trick to reduce perceived latency)
+            setUploadProgress(15); // Jump to 15% immediately
+            setTimeout(() => setUploadProgress(30), 100); // 30% after 100ms
+
             // Use stored API keys
             console.log("Using API keys for file upload:", Object.keys(apiKeys));
             formData.append('api_keys', JSON.stringify(apiKeys));
@@ -810,17 +906,18 @@ const UserChat = () => {
                         'Content-Type': 'multipart/form-data',
                     },
                     withCredentials: true,
+                    timeout: 60000, // 60 seconds timeout
                     onUploadProgress: (progressEvent) => {
                         const percentCompleted = Math.round(
-                            (progressEvent.loaded * 100) / (progressEvent.total || 100)
+                            (progressEvent.loaded * 60) / (progressEvent.total || 100)
                         );
-                        setUploadProgress(percentCompleted);
+                        setUploadProgress(30 + Math.min(percentCompleted, 60)); // Start from 30% to 90%
                     }
                 }
             );
 
             setUploadProgress(100);
-            setTimeout(() => setIsUploading(false), 500);
+            setTimeout(() => setIsUploading(false), 200); // Shorter delay before hiding
 
             if (response.data.success) {
                 setUserDocuments(response.data.file_urls || []);
@@ -900,7 +997,7 @@ const UserChat = () => {
                         {/* Show the GPT name when it's available */}
                         {gptData && (
                             <div className="ml-2 text-sm md:text-base font-medium flex items-center">
-                                <span className="mr-1">New Chat</span>
+                                <span className="mr-1">{gptData.name}</span>
                                 {gptData.model && (
                                     <div className={`flex items-center ml-2 text-xs md:text-sm px-2 py-0.5 rounded-full ${isDarkMode ? 'bg-gray-800' : 'bg-gray-100'}`}>
                                         {modelIcons[gptData.model === 'openrouter/auto' ? 'router-engine' : gptData.model] || null}
@@ -1069,7 +1166,33 @@ const UserChat = () => {
                                                     } rounded-2xl px-5 py-3`}
                                                 >
                                                     {msg.role === 'user' ? (
-                                                        <p className="whitespace-pre-wrap">{msg.content}</p>
+                                                        <>
+                                                            <p className="whitespace-pre-wrap">{msg.content}</p>
+                                                            
+                                                            {/* Display files attached to this message */}
+                                                            {msg.files && msg.files.length > 0 && (
+                                                                <div className="mt-2 flex flex-wrap gap-2">
+                                                                    {msg.files.map((file, index) => (
+                                                                        <div
+                                                                            key={`${file.name}-${index}`}
+                                                                            className="flex items-center py-1 px-2 bg-gray-50 dark:bg-gray-800/50 rounded-md border border-gray-200 dark:border-gray-700/50 max-w-fit"
+                                                                        >
+                                                                            <div className="mr-1.5 text-gray-500 dark:text-gray-400">
+                                                                                {getFileIcon(file.name)}
+                                                                            </div>
+                                                                            <span className="text-xs font-medium text-gray-700 dark:text-gray-300 truncate max-w-[140px]">
+                                                                                {file.name}
+                                                                            </span>
+                                                                            {file.size && (
+                                                                                <div className="text-[10px] text-gray-500 ml-1 whitespace-nowrap">
+                                                                                    {Math.round(file.size / 1024)} KB
+                                                                                </div>
+                                                                            )}
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                        </>
                                                     ) : (
                                                         <div className="markdown-content">
                                                             <ReactMarkdown
@@ -1155,55 +1278,67 @@ const UserChat = () => {
                                 <div
                                     className={`rounded-2xl px-4 py-2 assistant-message text-black dark:text-white rounded-bl-none w-full max-w-3xl ${
                                         streamingMessage.isError ? (isDarkMode ? 'bg-red-800/70 text-red-100' : 'bg-red-100 text-red-700') : ''
-                                    }`}
+                                    } ${streamingMessage.isProgress ? 'progress-message' : ''}`}
                                 >
                                     <div className="markdown-content">
-                                        <ReactMarkdown
-                                            remarkPlugins={[remarkGfm]}
-                                            rehypePlugins={[rehypeRaw]}
-                                            components={{
-                                                h1: ({ node, ...props }) => <h1 className="text-xl font-bold my-4" {...props} />,
-                                                h2: ({ node, ...props }) => <h2 className="text-lg font-bold my-3" {...props} />,
-                                                h3: ({ node, ...props }) => <h3 className="text-md font-bold my-3" {...props} />,
-                                                h4: ({ node, ...props }) => <h4 className="font-bold my-2" {...props} />,
-                                                p: ({ node, ...props }) => <p className="my-3" {...props} />,
-                                                ul: ({ node, ...props }) => <ul className="list-disc pl-6 my-3" {...props} />,
-                                                ol: ({ node, ...props }) => <ol className="list-decimal pl-6 my-3" {...props} />,
-                                                li: ({ node, index, ...props }) => <li className="my-2" key={index} {...props} />,
-                                                a: ({ node, ...props }) => <a className="text-blue-400 hover:underline" {...props} />,
-                                                blockquote: ({ node, ...props }) => <blockquote className="border-l-4 border-gray-500 dark:border-gray-400 pl-4 my-4 italic" {...props} />,
-                                                code({ node, inline, className, children, ...props }) {
-                                                    const match = /language-(\w+)/.exec(className || '');
-                                                    return !inline && match ? (
-                                                        <SyntaxHighlighter
-                                                            style={atomDark}
-                                                            language={match[1]}
-                                                            PreTag="div"
-                                                            className="rounded-md my-3"
-                                                            {...props}
-                                                        >
-                                                            {String(children).replace(/\n$/, '')}
-                                                        </SyntaxHighlighter>
-                                                    ) : (
-                                                        <code className={`${inline ? 'bg-gray-300 dark:bg-gray-600 px-1 py-0.5 rounded text-sm' : ''} ${className}`} {...props}>
-                                                            {children}
-                                                        </code>
-                                                    );
-                                                },
-                                                table: ({ node, ...props }) => (
-                                                    <div className="overflow-x-auto my-4">
-                                                        <table className="min-w-full border border-gray-400 dark:border-gray-500" {...props} />
+                                        {streamingMessage.isProgress ? (
+                                            // Progress message with animation
+                                            <div>
+                                                {streamingMessage.content.split('\n').map((line, i) => (
+                                                    <div key={i} className={`progress-item ${i > 0 ? 'mt-1' : ''}`} style={{animationDelay: `${i * 0.1}s`}}>
+                                                        {line}
                                                     </div>
-                                                ),
-                                                thead: ({ node, ...props }) => <thead className="bg-gray-300 dark:bg-gray-600" {...props} />,
-                                                tbody: ({ node, ...props }) => <tbody className="divide-y divide-gray-400 dark:divide-gray-500" {...props} />,
-                                                tr: ({ node, ...props }) => <tr className="hover:bg-gray-300 dark:hover:bg-gray-600" {...props} />,
-                                                th: ({ node, ...props }) => <th className="px-4 py-3 text-left font-medium" {...props} />,
-                                                td: ({ node, ...props }) => <td className="px-4 py-3" {...props} />,
-                                            }}
-                                        >
-                                            {streamingMessage.content}
-                                        </ReactMarkdown>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            // Regular markdown content
+                                            <ReactMarkdown
+                                                remarkPlugins={[remarkGfm]}
+                                                rehypePlugins={[rehypeRaw]}
+                                                components={{
+                                                    h1: ({ node, ...props }) => <h1 className="text-xl font-bold my-4" {...props} />,
+                                                    h2: ({ node, ...props }) => <h2 className="text-lg font-bold my-3" {...props} />,
+                                                    h3: ({ node, ...props }) => <h3 className="text-md font-bold my-3" {...props} />,
+                                                    h4: ({ node, ...props }) => <h4 className="font-bold my-2" {...props} />,
+                                                    p: ({ node, ...props }) => <p className="my-3" {...props} />,
+                                                    ul: ({ node, ...props }) => <ul className="list-disc pl-6 my-3" {...props} />,
+                                                    ol: ({ node, ...props }) => <ol className="list-decimal pl-6 my-3" {...props} />,
+                                                    li: ({ node, index, ...props }) => <li className="my-2" key={index} {...props} />,
+                                                    a: ({ node, ...props }) => <a className="text-blue-400 hover:underline" {...props} />,
+                                                    blockquote: ({ node, ...props }) => <blockquote className="border-l-4 border-gray-500 dark:border-gray-400 pl-4 my-4 italic" {...props} />,
+                                                    code({ node, inline, className, children, ...props }) {
+                                                        const match = /language-(\w+)/.exec(className || '');
+                                                        return !inline && match ? (
+                                                            <SyntaxHighlighter
+                                                                style={atomDark}
+                                                                language={match[1]}
+                                                                PreTag="div"
+                                                                className="rounded-md my-3"
+                                                                {...props}
+                                                            >
+                                                                {String(children).replace(/\n$/, '')}
+                                                            </SyntaxHighlighter>
+                                                        ) : (
+                                                            <code className={`${inline ? 'bg-gray-300 dark:bg-gray-600 px-1 py-0.5 rounded text-sm' : ''} ${className}`} {...props}>
+                                                                {children}
+                                                            </code>
+                                                        );
+                                                    },
+                                                    table: ({ node, ...props }) => (
+                                                        <div className="overflow-x-auto my-4">
+                                                            <table className="min-w-full border border-gray-400 dark:border-gray-500" {...props} />
+                                                        </div>
+                                                    ),
+                                                    thead: ({ node, ...props }) => <thead className="bg-gray-300 dark:bg-gray-600" {...props} />,
+                                                    tbody: ({ node, ...props }) => <tbody className="divide-y divide-gray-400 dark:divide-gray-500" {...props} />,
+                                                    tr: ({ node, ...props }) => <tr className="hover:bg-gray-300 dark:hover:bg-gray-600" {...props} />,
+                                                    th: ({ node, ...props }) => <th className="px-4 py-3 text-left font-medium" {...props} />,
+                                                    td: ({ node, ...props }) => <td className="px-4 py-3" {...props} />,
+                                                }}
+                                            >
+                                                {streamingMessage.content}
+                                            </ReactMarkdown>
+                                        )}
 
                                         {streamingMessage.isStreaming && (
                                             <div className="typing-animation mt-2 inline-flex items-center text-gray-400">
